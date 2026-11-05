@@ -56,7 +56,9 @@ public final class NativeMediaCompressorPlugin: NSObject, FlutterPlugin, MediaCo
       }
       let reply = transcoder.run()
       DispatchQueue.main.async {
-        self?.cancelFlags[taskId] = nil
+        // After a hot restart a new task may reuse this id while this one is
+        // still finishing; its flag must stay.
+        if self?.cancelFlags[taskId] === flag { self?.cancelFlags[taskId] = nil }
         completion(.success(reply))
       }
     }
