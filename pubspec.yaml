@@ -1,0 +1,47 @@
+name: native_media_compressor
+description: "Compress images and videos with the platform's own codecs: no ffmpeg, no bundled encoders."
+version: 0.0.1
+repository: https://github.com/StarProxima/native_media_compressor
+issue_tracker: https://github.com/StarProxima/native_media_compressor/issues
+topics:
+  - image
+  - video
+  - compression
+  - media
+
+environment:
+  sdk: ^3.7.0
+  flutter: '>=3.29.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_web_plugins:
+    sdk: flutter
+  web: ^1.0.0
+  plugin_platform_interface: ^2.0.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: io.github.starproxima.native_media_compressor
+        pluginClass: NativeMediaCompressorPlugin
+      ios:
+        pluginClass: NativeMediaCompressorPlugin
+        sharedDarwinSource: true
+      macos:
+        pluginClass: NativeMediaCompressorPlugin
+        sharedDarwinSource: true
+      windows:
+        pluginClass: NativeMediaCompressorPluginCApi
+      linux:
+        pluginClass: NativeMediaCompressorPlugin
+      web:
+        pluginClass: NativeMediaCompressorWeb
+        fileName: native_media_compressor_web.dart
