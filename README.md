@@ -67,7 +67,6 @@ Every status except `compressed` leaves nothing at `destination`.
 ## Platform notes
 
 - **iOS and macOS:** works with both Swift Package Manager and CocoaPods. HDR conversion needs iOS 14 or macOS 11.
-
 - **Android:** `source` may be a `content://` URI. HEIC decoding needs Android 9 or newer.
 - **Windows:** HDR video is `unsupported` for now. Video needs Media Foundation, which Windows N editions only have with the Media Feature Pack; without it video calls return `unsupported` and the app still starts. HEIC and WebP decoding need the matching codec extensions from the Microsoft Store.
 
