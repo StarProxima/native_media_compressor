@@ -19,9 +19,15 @@ enum ImageCodec {
   }
 
   private static func encode(_ request: ImageRequest, to output: URL) -> CompressionReply {
-    guard let source = openSource(request.source), let header = Header(source) else {
-      return .status(.failed, "cannot read image")
+    guard FileManager.default.isReadableFile(atPath: request.source),
+      let source = openSource(request.source)
+    else { return .status(.failed, "cannot read \(request.source)") }
+    // No type identifier means ImageIO has no decoder for this format on this
+    // OS version, such as WebP before iOS 14.
+    guard CGImageSourceGetType(source) != nil else {
+      return .status(.unsupported, "ImageIO cannot decode this format")
     }
+    guard let header = Header(source) else { return .status(.failed, "cannot read image") }
     let scale = Scaling.factor(
       width: Double(header.width), height: Double(header.height),
       maxShortSide: request.maxShortSide, maxLongSide: request.maxLongSide)
