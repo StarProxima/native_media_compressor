@@ -78,14 +78,18 @@ internal class VideoTranscoder(
             val videoExtractor = source.openExtractor().also(extractors::add)
             val videoTrack = videoExtractor.tracks("video/").firstOrNull()
                 ?: throw Stop(CompressionStatus.UNSUPPORTED, "no video track")
-            val sourceFormat = videoExtractor.getTrackFormat(videoTrack)
-            val transfer = shaderTransfer ?: VideoProber.hdrTransfer(source, sourceFormat)
+            val trackFormat = videoExtractor.getTrackFormat(videoTrack)
+            val (sourceFormat, decoderName) = findDecoder(trackFormat)
+            val transfer = shaderTransfer ?: VideoProber.hdrTransfer(source, trackFormat).let {
+                // Dolby Vision is PQ-based when the track does not say otherwise.
+                if (!it.isHdr && trackFormat.mime == MediaFormat.MIMETYPE_VIDEO_DOLBY_VISION) HdrTransfer.PQ else it
+            }
             if (transfer.isHdr && Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
                 throw Stop(CompressionStatus.UNSUPPORTED, "HDR video needs API 24")
             }
             // HDR streams are mostly 10-bit, which many decoders lack (the profile tells).
-            if (transfer.isHdr && MediaCodecList(MediaCodecList.REGULAR_CODECS).findDecoderForFormat(sourceFormat) == null) {
-                throw Stop(CompressionStatus.UNSUPPORTED, "no decoder for this HDR stream: $sourceFormat")
+            if (transfer.isHdr && decoderName == null) {
+                throw Stop(CompressionStatus.UNSUPPORTED, "no decoder for this HDR stream: $trackFormat")
             }
             // Decoders tone-map on request only from API 31; the shader does it otherwise.
             val toneMapInShader = transfer.isHdr && (shaderTransfer != null || Build.VERSION.SDK_INT < Build.VERSION_CODES.S)
@@ -150,7 +154,9 @@ internal class VideoTranscoder(
                 SurfaceFrames(OutputSurface(out.width, out.height), transfer).also { frames = it }
             }
             val sourceMime = requireNotNull(sourceFormat.mime)
-            decoder = codec("$sourceMime decoder") { MediaCodec.createDecoderByType(sourceMime) }
+            decoder = codec("$sourceMime decoder") {
+                decoderName?.let(MediaCodec::createByCodecName) ?: MediaCodec.createDecoderByType(sourceMime)
+            }
             codec("$sourceMime decoder for ${stored.width}x${stored.height}") {
                 decoder.configure(sourceFormat, surfaceFrames?.surface, null, 0)
             }
@@ -421,6 +427,45 @@ internal class VideoTranscoder(
             block()
         } catch (error: Exception) {
             throw Stop(CompressionStatus.UNSUPPORTED, "no $what: $error")
+        }
+
+        /**
+         * The format to decode and the name of a decoder that claims to support it,
+         * null when none does. Dolby Vision profile 8 carries an HEVC base layer that
+         * any HEVC decoder can play when the device has no Dolby Vision decoder.
+         */
+        fun findDecoder(trackFormat: MediaFormat): Pair<MediaFormat, String?> {
+            val name = decoderFor(trackFormat)
+            val isProfile8 = trackFormat.mime == MediaFormat.MIMETYPE_VIDEO_DOLBY_VISION &&
+                trackFormat.intOrNull(MediaFormat.KEY_PROFILE) == CodecProfileLevel.DolbyVisionProfileDvheSt
+            if (name != null || !isProfile8) return trackFormat to name
+            val baseLayer = hevcBaseLayer(trackFormat)
+            return baseLayer to decoderFor(baseLayer)
+        }
+
+        // Before API 22 the lookup fails for any format that has a frame rate.
+        private fun decoderFor(format: MediaFormat): String? = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP_MR1) {
+            null
+        } else {
+            runCatching { MediaCodecList(MediaCodecList.REGULAR_CODECS).findDecoderForFormat(format) }.getOrNull()
+        }
+
+        private fun hevcBaseLayer(format: MediaFormat): MediaFormat {
+            val width = format.getInteger(MediaFormat.KEY_WIDTH)
+            val height = format.getInteger(MediaFormat.KEY_HEIGHT)
+            return MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_HEVC, width, height).apply {
+                for (key in listOf("csd-0", "csd-1")) {
+                    if (format.containsKey(key)) setByteBuffer(key, format.getByteBuffer(key))
+                }
+                for (key in listOf(
+                    MediaFormat.KEY_MAX_INPUT_SIZE, MediaFormat.KEY_FRAME_RATE, MediaFormat.KEY_ROTATION,
+                    MediaFormat.KEY_COLOR_STANDARD, MediaFormat.KEY_COLOR_TRANSFER, MediaFormat.KEY_COLOR_RANGE,
+                )) {
+                    format.intOrNull(key)?.let { setInteger(key, it) }
+                }
+                format.longOrNull(MediaFormat.KEY_DURATION)?.let { setLong(MediaFormat.KEY_DURATION, it) }
+                setInteger(MediaFormat.KEY_PROFILE, CodecProfileLevel.HEVCProfileMain10)
+            }
         }
 
         fun videoCapabilities(codec: MediaCodec): MediaCodecInfo.VideoCapabilities? = runCatching {
