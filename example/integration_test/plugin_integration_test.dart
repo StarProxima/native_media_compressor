@@ -386,6 +386,11 @@ void main() {
       expect((gif!.width, gif.height), (320, 240));
       expect(gif.frameCount, 3);
       expect(gif.isAnimated, isTrue);
+      final apng = await NativeMediaCompressor.probeImage(
+        await _fixture('animated.png'),
+      );
+      expect(apng!.frameCount, 3);
+      expect(apng.mimeType, 'image/png');
     });
 
     testWidgets('reads HEIC and WebP where the platform can', (_) async {
