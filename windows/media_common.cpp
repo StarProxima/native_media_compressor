@@ -3,6 +3,7 @@
 #include <objbase.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <utility>
 
@@ -79,6 +80,11 @@ int64_t FileSize(const std::wstring& path) {
          static_cast<int64_t>(data.nFileSizeLow);
 }
 
+bool IsDirectory(const std::wstring& path) {
+  const DWORD attributes = GetFileAttributesW(path.c_str());
+  return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+}
+
 void RemoveFile(const std::wstring& path) {
   if (path.empty()) return;
   for (int attempt = 0; attempt < 20; ++attempt) {
@@ -88,6 +94,46 @@ void RemoveFile(const std::wstring& path) {
     if (error != ERROR_SHARING_VIOLATION && error != ERROR_ACCESS_DENIED) return;
     Sleep(50);
   }
+}
+
+namespace {
+
+std::wstring TemporarySibling(const std::wstring& destination) {
+  static std::atomic<unsigned long> counter{0};
+  const size_t separator = destination.find_last_of(L"\\/");
+  const size_t name_start = separator == std::wstring::npos ? 0 : separator + 1;
+  const size_t dot = destination.find_last_of(L'.');
+  const bool has_extension = dot != std::wstring::npos && dot > name_start;
+  const std::wstring stem = has_extension ? destination.substr(0, dot) : destination;
+  const std::wstring extension = has_extension ? destination.substr(dot) : std::wstring();
+  return stem + L".nmc-" + std::to_wstring(GetCurrentProcessId()) + L"-" +
+         std::to_wstring(++counter) + extension;
+}
+
+}  // namespace
+
+PendingOutput::PendingOutput(const std::wstring& destination)
+    : destination_(destination), path_(TemporarySibling(destination)) {
+  RemoveFile(path_);
+}
+
+PendingOutput::~PendingOutput() {
+  if (!committed_) RemoveFile(path_);
+}
+
+bool PendingOutput::Commit() {
+  // The source may be the destination, and a just released decoder can keep
+  // its handle for a moment, so a busy destination is retried briefly.
+  for (int attempt = 0; attempt < 20; ++attempt) {
+    if (MoveFileExW(path_.c_str(), destination_.c_str(), MOVEFILE_REPLACE_EXISTING)) {
+      committed_ = true;
+      return true;
+    }
+    const DWORD error = GetLastError();
+    if (error != ERROR_SHARING_VIOLATION && error != ERROR_ACCESS_DENIED) return false;
+    Sleep(50);
+  }
+  return false;
 }
 
 ComScope::ComScope()
