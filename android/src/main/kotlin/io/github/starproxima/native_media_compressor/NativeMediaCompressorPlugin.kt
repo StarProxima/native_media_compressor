@@ -46,6 +46,9 @@ class NativeMediaCompressorPlugin : FlutterPlugin, MediaCompressorHostApi {
     }
 
     override fun compressVideo(taskId: Long, request: VideoRequest, callback: (Result<CompressionReply>) -> Unit) {
+        // After a hot restart a new isolate can reuse the id of a task that still
+        // runs here, so the cancel flag also serves as the task's identity: an old
+        // task neither reports progress under the id nor unregisters the new one.
         val cancelled = AtomicBoolean(false)
         videoTasks[taskId] = cancelled
         requireNotNull(videoExecutor).execute {
@@ -54,12 +57,14 @@ class NativeMediaCompressorPlugin : FlutterPlugin, MediaCompressorHostApi {
                     source = MediaSource(context, request.source),
                     request = request,
                     isCancelled = cancelled::get,
-                    onProgress = { progress -> main.post { sendProgress(taskId, progress) } },
+                    onProgress = { progress ->
+                        main.post { if (videoTasks[taskId] === cancelled) sendProgress(taskId, progress) }
+                    },
                 ).run()
             }
-            videoTasks.remove(taskId)
+            val ownsId = videoTasks.remove(taskId, cancelled)
             main.post {
-                if (reply.status == CompressionStatus.COMPRESSED) sendProgress(taskId, 1.0)
+                if (ownsId && reply.status == CompressionStatus.COMPRESSED) sendProgress(taskId, 1.0)
                 callback(Result.success(reply))
             }
         }
