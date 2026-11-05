@@ -44,6 +44,12 @@ ff -f lavfi -i "testsrc2=size=1280x720:rate=30:duration=1" -f lavfi -i "$TONE:du
   -x265-params "log-level=error:colorprim=bt2020:transfer=arib-std-b67:colormatrix=bt2020nc" \
   -c:a aac -b:a 128k hlg_hevc.mov
 
+ff -f lavfi -i "smptehdbars=size=1280x720:rate=30:duration=1" \
+  -vf "setparams=color_primaries=bt2020:color_trc=arib-std-b67:colorspace=bt2020nc,format=yuv420p" \
+  -c:v libx265 -preset veryfast -b:v 1500k -tag:v hvc1 \
+  -x265-params "log-level=error:colorprim=bt2020:transfer=arib-std-b67:colormatrix=bt2020nc" \
+  -movflags +write_colr hlg_hevc_8bit.mp4
+
 ff -f lavfi -i "$TONE:duration=1" -c:a aac -b:a 128k audio_only.m4a
 
 # screen_ios.mov and screen_android.mp4 are real screen recordings from the iOS

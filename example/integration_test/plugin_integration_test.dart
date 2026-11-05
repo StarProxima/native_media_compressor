@@ -76,7 +76,11 @@ void main() {
     });
 
     testWidgets('detects HDR transfer functions', (_) async {
-      for (final name in ['hdr10_hevc.mp4', 'hlg_hevc.mov']) {
+      for (final name in [
+        'hdr10_hevc.mp4',
+        'hlg_hevc.mov',
+        'hlg_hevc_8bit.mp4',
+      ]) {
         final probe = await NativeMediaCompressor.probeVideo(
           await _fixture(name),
         );
@@ -212,7 +216,14 @@ void main() {
     });
 
     testWidgets('converts HDR to SDR', (_) async {
-      for (final name in ['hdr10_hevc.mp4', 'hlg_hevc.mov']) {
+      // The 10-bit HEVC files need a Main 10 decoder, which phones have and
+      // Android emulators do not. The 8-bit HLG file runs the same tone
+      // mapping everywhere.
+      for (final (name, needsMain10) in [
+        ('hlg_hevc_8bit.mp4', false),
+        ('hdr10_hevc.mp4', true),
+        ('hlg_hevc.mov', true),
+      ]) {
         final destination = _out('$name.mp4');
         final result =
             await NativeMediaCompressor.compressVideo(
@@ -221,7 +232,7 @@ void main() {
               options: const VideoOptions(maxShortSide: 360),
             ).result;
 
-        if (_fullCodecs) {
+        if (_fullCodecs && !(needsMain10 && Platform.isAndroid)) {
           expect(
             result.status,
             CompressionStatus.compressed,
