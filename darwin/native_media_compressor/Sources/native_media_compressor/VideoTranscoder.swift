@@ -8,7 +8,8 @@ final class VideoTranscoder {
   private static let watchdogInterval = DispatchTimeInterval.milliseconds(250)
 
   private let request: VideoRequest
-  private let destination: URL
+  private let staged: StagedOutput
+  private var output: URL { staged.file }
   private let isCancelled: () -> Bool
   private let onProgress: (Double) -> Void
   // Every writer input is fed on this queue, so the state below needs no lock.
@@ -24,28 +25,28 @@ final class VideoTranscoder {
     onProgress: @escaping (Double) -> Void
   ) {
     self.request = request
-    self.destination = URL(fileURLWithPath: request.destination)
+    self.staged = StagedOutput(destination: URL(fileURLWithPath: request.destination))
     self.isCancelled = isCancelled
     self.onProgress = onProgress
   }
 
   /// Blocks the calling thread until the output is finished or abandoned.
   func run() -> CompressionReply {
-    destination.removeFile()
     if isCancelled() { return .status(.cancelled) }
-    let box = ReplyBox()
-    let done = DispatchSemaphore(value: 0)
-    Task {
-      do {
-        box.reply = try await transcode()
-      } catch {
-        box.reply = Self.failure(error)
+    return staged.run {
+      let box = ReplyBox()
+      let done = DispatchSemaphore(value: 0)
+      Task {
+        do {
+          box.reply = try await transcode()
+        } catch {
+          box.reply = Self.failure(error)
+        }
+        done.signal()
       }
-      done.signal()
+      done.wait()
+      return box.reply
     }
-    done.wait()
-    if box.reply.status != .compressed { destination.removeFile() }
-    return box.reply
   }
 
   private func transcode() async throws -> CompressionReply {
@@ -65,7 +66,7 @@ final class VideoTranscoder {
     }
 
     let reader = try AVAssetReader(asset: asset)
-    let writer = try AVAssetWriter(outputURL: destination, fileType: .mp4)
+    let writer = try AVAssetWriter(outputURL: output, fileType: .mp4)
 
     // Asking the decoder for 8-bit BT.709 makes VideoToolbox convert the
     // colours, which tone-maps PQ and HLG input. The writer gets the same tags
@@ -186,7 +187,7 @@ final class VideoTranscoder {
     await writer.finishWriting()
     guard writer.status == .completed else { return Self.failure(writer.error) }
 
-    let size = destination.fileSize
+    let size = output.fileSize
     if let maxBytes = request.maxBytes, size > maxBytes { return .status(.tooLarge) }
     queue.sync {
       if reportedPercent < 100 {
@@ -229,7 +230,7 @@ final class VideoTranscoder {
         onAppended(sample)
         writtenSamples += 1
         if let maxBytes = request.maxBytes, writtenSamples % Self.sizeCheckSamples == 0,
-          destination.fileSize > maxBytes
+          output.fileSize > maxBytes
         {
           stopReply = .status(.tooLarge)
           stopAll(reader: reader)
