@@ -3,6 +3,7 @@
 #include <flutter_linux/flutter_linux.h>
 
 #include <algorithm>
+#include <exception>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -43,7 +44,11 @@ void PostToMain(std::function<void()> task) {
   g_main_context_invoke_full(
       nullptr, G_PRIORITY_DEFAULT,
       [](gpointer data) -> gboolean {
-        (*static_cast<std::function<void()>*>(data))();
+        try {
+          (*static_cast<std::function<void()>*>(data))();
+        } catch (const std::exception& error) {
+          g_warning("native_media_compressor: %s", error.what());
+        }
         return G_SOURCE_REMOVE;
       },
       new std::function<void()>(std::move(task)),
@@ -54,7 +59,11 @@ void RunInBackground(std::function<void()> task) {
   static GThreadPool* pool = g_thread_pool_new(
       [](gpointer data, gpointer) {
         std::unique_ptr<std::function<void()>> owned(static_cast<std::function<void()>*>(data));
-        (*owned)();
+        try {
+          (*owned)();
+        } catch (const std::exception& error) {
+          g_warning("native_media_compressor: %s", error.what());
+        }
       },
       nullptr, static_cast<gint>(std::max(2u, g_get_num_processors())), FALSE, nullptr);
   g_thread_pool_push(pool, new std::function<void()>(std::move(task)), nullptr);
@@ -172,8 +181,65 @@ void HandleProbeVideo(const gchar* source,
   });
 }
 
+// The generated channel code is C: exceptions must not unwind into it.
+NmcCompressionReply* FailureReply(const std::exception& error) {
+  return nmc_compression_reply_new(NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_FAILED, nullptr,
+                                   nullptr, nullptr, error.what());
+}
+
+void GuardedCompressVideo(int64_t task_id, NmcVideoRequest* request,
+                          NmcMediaCompressorHostApiResponseHandle* response_handle,
+                          gpointer user_data) {
+  try {
+    HandleCompressVideo(task_id, request, response_handle, user_data);
+  } catch (const std::exception& error) {
+    g_autoptr(NmcCompressionReply) reply = FailureReply(error);
+    nmc_media_compressor_host_api_respond_compress_video(response_handle, reply);
+  }
+}
+
+void GuardedCompressImage(NmcImageRequest* request,
+                          NmcMediaCompressorHostApiResponseHandle* response_handle,
+                          gpointer user_data) {
+  try {
+    HandleCompressImage(request, response_handle, user_data);
+  } catch (const std::exception& error) {
+    g_autoptr(NmcCompressionReply) reply = FailureReply(error);
+    nmc_media_compressor_host_api_respond_compress_image(response_handle, reply);
+  }
+}
+
+NmcMediaCompressorHostApiCancelResponse* GuardedCancel(int64_t task_id, gpointer user_data) {
+  try {
+    return HandleCancel(task_id, user_data);
+  } catch (const std::exception&) {
+    return nmc_media_compressor_host_api_cancel_response_new();
+  }
+}
+
+void GuardedProbeImage(const gchar* source,
+                       NmcMediaCompressorHostApiResponseHandle* response_handle,
+                       gpointer user_data) {
+  try {
+    HandleProbeImage(source, response_handle, user_data);
+  } catch (const std::exception&) {
+    nmc_media_compressor_host_api_respond_probe_image(response_handle, nullptr);
+  }
+}
+
+void GuardedProbeVideo(const gchar* source,
+                       NmcMediaCompressorHostApiResponseHandle* response_handle,
+                       gpointer user_data) {
+  try {
+    HandleProbeVideo(source, response_handle, user_data);
+  } catch (const std::exception&) {
+    nmc_media_compressor_host_api_respond_probe_video(response_handle, nullptr);
+  }
+}
+
 const NmcMediaCompressorHostApiVTable kHostApi = {
-    HandleCompressVideo, HandleCompressImage, HandleCancel, HandleProbeImage, HandleProbeVideo,
+    GuardedCompressVideo, GuardedCompressImage, GuardedCancel, GuardedProbeImage,
+    GuardedProbeVideo,
 };
 
 }  // namespace

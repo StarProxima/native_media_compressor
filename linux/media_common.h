@@ -35,6 +35,30 @@ int64_t ScaledSide(int64_t side, double scale);
 // 4:2:0 chroma needs even frame sizes.
 int64_t ScaledEvenSide(int64_t side, double scale);
 
+// A temporary output file next to the destination, with the same extension.
+// It replaces the destination only through Finish with a compressed outcome;
+// otherwise it is deleted and the destination is left as it was, which also
+// keeps the source intact when the source is the destination.
+class PendingOutput {
+ public:
+  explicit PendingOutput(std::string destination);
+  ~PendingOutput();
+  PendingOutput(const PendingOutput&) = delete;
+  PendingOutput& operator=(const PendingOutput&) = delete;
+
+  const std::string& path() const { return path_; }
+  bool destination_is_directory() const;
+
+  // For a compressed outcome, moves the file over the destination and fills
+  // size_bytes; a failed move turns it into failed. Any other outcome deletes
+  // the temporary file.
+  Outcome Finish(Outcome outcome);
+
+ private:
+  std::string destination_;
+  std::string path_;
+};
+
 // File size in bytes, or -1 when the file does not exist.
 int64_t FileSize(const std::string& path);
 

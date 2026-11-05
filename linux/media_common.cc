@@ -4,6 +4,7 @@
 #include <glib/gstdio.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -116,6 +117,35 @@ int64_t ScaledEvenSide(int64_t side, double scale) {
   // The epsilon keeps 1206 * (720 / 1206.0) at 720 instead of 719.
   const auto floored = static_cast<int64_t>(std::floor(static_cast<double>(side) * scale + 1e-6));
   return std::max<int64_t>(2, floored & ~int64_t{1});
+}
+
+PendingOutput::PendingOutput(std::string destination) : destination_(std::move(destination)) {
+  g_autofree gchar* directory = g_path_get_dirname(destination_.c_str());
+  g_autofree gchar* name = g_path_get_basename(destination_.c_str());
+  g_autofree gchar* temp = g_strdup_printf("%s/.nmc-%08x%08x-%s", directory, g_random_int(),
+                                           g_random_int(), name);
+  path_ = temp;
+}
+
+PendingOutput::~PendingOutput() { RemoveFile(path_); }
+
+bool PendingOutput::destination_is_directory() const {
+  return g_file_test(destination_.c_str(), G_FILE_TEST_IS_DIR);
+}
+
+Outcome PendingOutput::Finish(Outcome outcome) {
+  if (outcome.status != NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_COMPRESSED) {
+    RemoveFile(path_);
+    return outcome;
+  }
+  if (destination_is_directory() || g_rename(path_.c_str(), destination_.c_str()) != 0) {
+    const std::string reason = g_strerror(errno);
+    RemoveFile(path_);
+    return Outcome::Of(NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_FAILED,
+                       "Could not move the output to the destination: " + reason);
+  }
+  outcome.size_bytes = FileSize(destination_);
+  return outcome;
 }
 
 int64_t FileSize(const std::string& path) {

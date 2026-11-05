@@ -1,5 +1,6 @@
 #include "video_queue.h"
 
+#include <exception>
 #include <utility>
 #include <vector>
 
@@ -8,7 +9,19 @@ namespace native_media_compressor {
 namespace {
 
 void Finish(VideoQueue::Task& task, const Outcome& outcome) {
-  if (task.on_done) task.on_done(outcome);
+  try {
+    if (task.on_done) task.on_done(outcome);
+  } catch (const std::exception&) {
+    // Out of memory while posting the reply: nothing left to report it with.
+  }
+}
+
+Outcome RunGuarded(const VideoQueue::Runner& runner, VideoQueue::Task& task) {
+  try {
+    return runner(task);
+  } catch (const std::exception& error) {
+    return Outcome::Of(NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_FAILED, error.what());
+  }
 }
 
 }  // namespace
@@ -34,8 +47,9 @@ void VideoQueue::Enqueue(std::shared_ptr<Task> task) {
   {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!stopping_) {
-      pending_.push_back(task);
+      // Started before queueing, so a failed start leaves nothing queued.
       if (!thread_.joinable()) thread_ = std::thread(&VideoQueue::Work, this);
+      pending_.push_back(task);
       task = nullptr;
     }
   }
@@ -81,7 +95,7 @@ void VideoQueue::Work() {
     }
     const Outcome outcome =
         task->cancelled ? Outcome::Of(NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_CANCELLED)
-                        : runner_(*task);
+                        : RunGuarded(runner_, *task);
     {
       std::lock_guard<std::mutex> lock(mutex_);
       running_ = nullptr;

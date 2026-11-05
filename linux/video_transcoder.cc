@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <exception>
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -36,9 +37,8 @@ std::string NormalizeAudioCodec(const std::string& caps_name, int mpeg_version) 
 
 std::optional<VideoInfo> ProbeVideoFile(const std::string&) { return std::nullopt; }
 
-Outcome TranscodeVideo(const VideoJob& job, const std::atomic<bool>&,
+Outcome TranscodeVideo(const VideoJob&, const std::atomic<bool>&,
                        const std::function<void(double)>&) {
-  RemoveFile(job.destination);
   return Outcome::Of(NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_UNSUPPORTED,
                      "Built without GStreamer headers");
 }
@@ -321,8 +321,7 @@ std::string PadMediaType(const GstApi* g, GstPad* pad) {
   return name;
 }
 
-void OnParsedPad(GstElement*, GstPad* pad, gpointer data) {
-  auto* graph = static_cast<Graph*>(data);
+void LinkParsedPad(Graph* graph, GstPad* pad) {
   const std::string media = PadMediaType(graph->g, pad);
   std::lock_guard<std::mutex> lock(graph->mutex);
   GstElement* target = nullptr;
@@ -340,6 +339,15 @@ void OnParsedPad(GstElement*, GstPad* pad, gpointer data) {
   if (target == nullptr || !graph->LinkPad(pad, target)) graph->Discard(pad);
 }
 
+// Exceptions must not unwind into GStreamer's C frames; an unlinked pad then
+// ends the pipeline with a not-linked error, reported as failed.
+void OnParsedPad(GstElement*, GstPad* pad, gpointer data) {
+  try {
+    LinkParsedPad(static_cast<Graph*>(data), pad);
+  } catch (const std::exception&) {
+  }
+}
+
 void OnParsedPadsDone(GstElement*, gpointer data) {
   auto* graph = static_cast<Graph*>(data);
   std::lock_guard<std::mutex> lock(graph->mutex);
@@ -349,8 +357,7 @@ void OnParsedPadsDone(GstElement*, gpointer data) {
   }
 }
 
-void OnDecodedPad(GstElement*, GstPad* pad, gpointer data) {
-  auto* graph = static_cast<Graph*>(data);
+void LinkDecodedPad(Graph* graph, GstPad* pad) {
   const std::string media = PadMediaType(graph->g, pad);
   std::lock_guard<std::mutex> lock(graph->mutex);
   if (media == "video/x-raw" && !graph->raw_linked && graph->LinkPad(pad, graph->video_rate)) {
@@ -358,6 +365,13 @@ void OnDecodedPad(GstElement*, GstPad* pad, gpointer data) {
     return;
   }
   graph->Discard(pad);
+}
+
+void OnDecodedPad(GstElement*, GstPad* pad, gpointer data) {
+  try {
+    LinkDecodedPad(static_cast<Graph*>(data), pad);
+  } catch (const std::exception&) {
+  }
 }
 
 GstPadProbeReturn CountMuxInput(Graph* graph, GstPadProbeInfo* info, bool video) {
@@ -580,23 +594,8 @@ Outcome Run(const GstApi* g, const VideoJob& job, const Discovery& discovery,
   return *outcome;
 }
 
-}  // namespace
-
-std::optional<VideoInfo> ProbeVideoFile(const std::string& path) {
-  const GstApi* g = LoadGstApi();
-  if (g == nullptr) return std::nullopt;
-  DiscoveryHolder holder{g, Discover(g, path)};
-  if (holder.discovery.result != Discovery::Result::kOk) return std::nullopt;
-  return holder.discovery.info;
-}
-
-Outcome TranscodeVideo(const VideoJob& job, const std::atomic<bool>& cancelled,
-                       const std::function<void(double)>& on_progress) {
-  RemoveFile(job.destination);
-  const GstApi* g = LoadGstApi();
-  if (g == nullptr) return Unsupported("GStreamer is not installed");
-  if (cancelled) return Cancelled();
-
+Outcome Transcode(const GstApi* g, const VideoJob& job, const std::atomic<bool>& cancelled,
+                  const std::function<void(double)>& on_progress) {
   DiscoveryHolder holder{g, Discover(g, job.source)};
   const Discovery& discovery = holder.discovery;
   if (discovery.result == Discovery::Result::kUnreadable) return Failed(discovery.error);
@@ -611,12 +610,38 @@ Outcome TranscodeVideo(const VideoJob& job, const std::atomic<bool>& cancelled,
     return Unsupported("No GStreamer decoder for " + discovery.info.video_codec);
   }
   if (cancelled) return Cancelled();
+  return Run(g, job, discovery, cancelled, on_progress);
+}
 
-  Outcome outcome = Run(g, job, discovery, cancelled, on_progress);
-  if (outcome.status != NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_COMPRESSED) {
-    RemoveFile(job.destination);
+}  // namespace
+
+std::optional<VideoInfo> ProbeVideoFile(const std::string& path) {
+  try {
+    const GstApi* g = LoadGstApi();
+    if (g == nullptr) return std::nullopt;
+    DiscoveryHolder holder{g, Discover(g, path)};
+    if (holder.discovery.result != Discovery::Result::kOk) return std::nullopt;
+    return holder.discovery.info;
+  } catch (const std::exception&) {
+    return std::nullopt;
   }
-  return outcome;
+}
+
+Outcome TranscodeVideo(const VideoJob& job, const std::atomic<bool>& cancelled,
+                       const std::function<void(double)>& on_progress) {
+  try {
+    // Unwinding deletes the temporary file too.
+    PendingOutput output(job.destination);
+    if (output.destination_is_directory()) return Failed("The destination is a directory");
+    const GstApi* g = LoadGstApi();
+    if (g == nullptr) return Unsupported("GStreamer is not installed");
+    if (cancelled) return Cancelled();
+    VideoJob pending = job;
+    pending.destination = output.path();
+    return output.Finish(Transcode(g, pending, cancelled, on_progress));
+  } catch (const std::exception& error) {
+    return Failed(error.what());
+  }
 }
 
 #endif  // NMC_HAVE_GST_HEADERS

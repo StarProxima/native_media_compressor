@@ -1,5 +1,6 @@
 #include <gdk-pixbuf/gdk-pixbuf.h>
 #include <glib.h>
+#include <glib/gstdio.h>
 #include <gtest/gtest.h>
 
 #include <condition_variable>
@@ -35,6 +36,38 @@ std::vector<uint8_t> ReadBytes(const std::string& path) {
   std::vector<uint8_t> bytes(contents, contents + length);
   g_free(contents);
   return bytes;
+}
+
+std::string MakeDirectory() {
+  gchar* path = g_dir_make_tmp("nmc_test_XXXXXX", nullptr);
+  std::string result = path != nullptr ? path : "";
+  g_free(path);
+  return result;
+}
+
+// Counts files, so a leftover temporary output shows up.
+int DirectoryEntries(const std::string& path) {
+  GDir* directory = g_dir_open(path.c_str(), 0, nullptr);
+  if (directory == nullptr) return -1;
+  int count = 0;
+  while (g_dir_read_name(directory) != nullptr) count++;
+  g_dir_close(directory);
+  return count;
+}
+
+void RemoveDirectory(const std::string& path) {
+  GDir* directory = g_dir_open(path.c_str(), 0, nullptr);
+  if (directory == nullptr) return;
+  while (const gchar* name = g_dir_read_name(directory)) {
+    const std::string child = path + "/" + name;
+    if (g_file_test(child.c_str(), G_FILE_TEST_IS_DIR)) {
+      g_rmdir(child.c_str());
+    } else {
+      RemoveFile(child);
+    }
+  }
+  g_dir_close(directory);
+  g_rmdir(path.c_str());
 }
 
 void Append(std::vector<uint8_t>& bytes, const std::string& text) {
@@ -258,16 +291,63 @@ TEST(CompressImageFile, WritesPngWithoutScalingUp) {
   RemoveFile(job.destination);
 }
 
-TEST(CompressImageFile, BrokenInputLeavesNoOutput) {
+TEST(CompressImageFile, BrokenInputKeepsTheDestination) {
+  const std::string directory = MakeDirectory();
   ImageJob job;
-  job.source = TempPath("broken.jpg");
-  job.destination = TempPath("broken-out.jpg");
+  job.source = directory + "/broken.jpg";
+  job.destination = directory + "/out.jpg";
   WriteBytes(job.source, std::vector<uint8_t>(256, 'x'));
   WriteBytes(job.destination, {'s', 't', 'a', 'l', 'e'});
   const Outcome outcome = CompressImageFile(job);
   EXPECT_EQ(outcome.status, NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_FAILED);
-  EXPECT_EQ(FileSize(job.destination), -1);
-  RemoveFile(job.source);
+  EXPECT_EQ(ReadBytes(job.destination), (std::vector<uint8_t>{'s', 't', 'a', 'l', 'e'}));
+  EXPECT_EQ(DirectoryEntries(directory), 2);
+  RemoveDirectory(directory);
+}
+
+TEST(CompressImageFile, CompressesInPlace) {
+  const std::string directory = MakeDirectory();
+  const std::string path = directory + "/photo.png";
+  GdkPixbuf* pixbuf = SolidPixbuf(400, 300, false, 0x3366CCFF);
+  ASSERT_TRUE(gdk_pixbuf_save(pixbuf, path.c_str(), "png", nullptr, nullptr));
+  g_object_unref(pixbuf);
+  ImageJob job;
+  job.source = path;
+  job.destination = path;
+  job.bounds.max_long_side = 200;
+  const Outcome outcome = CompressImageFile(job);
+  ASSERT_EQ(outcome.status, NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_COMPRESSED) << outcome.message;
+  EXPECT_EQ(outcome.size_bytes, FileSize(path));
+  const std::optional<ImageInfo> written = ProbeImageFile(path);
+  ASSERT_TRUE(written.has_value());
+  EXPECT_EQ(written->mime_type, "image/jpeg");
+  EXPECT_EQ(written->width, 200);
+  EXPECT_EQ(DirectoryEntries(directory), 1);
+  RemoveDirectory(directory);
+}
+
+TEST(CompressImageFile, LeavesADirectoryDestinationAlone) {
+  const std::string directory = MakeDirectory();
+  const std::string source = directory + "/photo.png";
+  GdkPixbuf* pixbuf = SolidPixbuf(40, 30, false, 0x3366CCFF);
+  ASSERT_TRUE(gdk_pixbuf_save(pixbuf, source.c_str(), "png", nullptr, nullptr));
+  g_object_unref(pixbuf);
+  const std::string target = directory + "/target";
+  ASSERT_EQ(g_mkdir(target.c_str(), 0700), 0);
+  ImageJob job;
+  job.source = source;
+  job.destination = target;
+  EXPECT_EQ(CompressImageFile(job).status, NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_FAILED);
+  EXPECT_TRUE(g_file_test(target.c_str(), G_FILE_TEST_IS_DIR));
+  EXPECT_EQ(DirectoryEntries(directory), 2);
+  RemoveDirectory(directory);
+}
+
+TEST(PendingOutput, SitsNextToTheDestinationWithItsExtension) {
+  PendingOutput output("/some/dir/clip.mp4");
+  EXPECT_TRUE(g_str_has_prefix(output.path().c_str(), "/some/dir/"));
+  EXPECT_TRUE(g_str_has_suffix(output.path().c_str(), ".mp4"));
+  EXPECT_NE(output.path(), "/some/dir/clip.mp4");
 }
 
 TEST(VideoQueue, CancelsAQueuedTaskWithoutRunningIt) {
@@ -338,16 +418,19 @@ TEST(TranscodeVideo, NonVideoInputIsRejected) {
   RemoveFile(job.source);
 }
 
-TEST(TranscodeVideo, CancelledBeforeStartLeavesNoOutput) {
+TEST(TranscodeVideo, CancelledBeforeStartKeepsTheDestination) {
+  const std::string directory = MakeDirectory();
   VideoJob job;
-  job.source = TempPath("missing.mp4");
-  job.destination = TempPath("cancelled-out.mp4");
+  job.source = directory + "/missing.mp4";
+  job.destination = directory + "/out.mp4";
   WriteBytes(job.destination, {'s', 't', 'a', 'l', 'e'});
   std::atomic<bool> cancelled{true};
   const Outcome outcome = TranscodeVideo(job, cancelled, nullptr);
   EXPECT_TRUE(outcome.status == NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_CANCELLED ||
               outcome.status == NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_UNSUPPORTED);
-  EXPECT_EQ(FileSize(job.destination), -1);
+  EXPECT_EQ(ReadBytes(job.destination), (std::vector<uint8_t>{'s', 't', 'a', 'l', 'e'}));
+  EXPECT_EQ(DirectoryEntries(directory), 1);
+  RemoveDirectory(directory);
 }
 
 }  // namespace test

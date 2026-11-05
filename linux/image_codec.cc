@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <exception>
 #include <utility>
 
 namespace native_media_compressor {
@@ -85,39 +86,21 @@ bool IsUnknownType(const GError* error) {
          error->code == GDK_PIXBUF_ERROR_UNKNOWN_TYPE;
 }
 
-Outcome Fail(const ImageJob& job, NmcCompressionStatus status, std::string message) {
-  RemoveFile(job.destination);
+Outcome Fail(NmcCompressionStatus status, std::string message) {
   return Outcome::Of(status, std::move(message));
 }
 
-}  // namespace
-
-std::optional<ImageInfo> ProbeImageFile(const std::string& path) {
-  gint width = 0;
-  gint height = 0;
-  GdkPixbufFormat* format = gdk_pixbuf_get_file_info(path.c_str(), &width, &height);
-  if (format == nullptr || width <= 0 || height <= 0) return std::nullopt;
-  ImageInfo info;
-  info.mime_type = MimeOf(path, format);
-  const bool swapped = info.mime_type == "image/jpeg" && ReadJpegOrientation(path) >= 5;
-  info.width = swapped ? height : width;
-  info.height = swapped ? width : height;
-  info.frame_count = FrameCount(path, info.mime_type);
-  return info;
-}
-
-Outcome CompressImageFile(const ImageJob& job) {
-  RemoveFile(job.destination);
+Outcome Encode(const ImageJob& job, const std::string& output) {
   gint width = 0;
   gint height = 0;
   GdkPixbufFormat* format = gdk_pixbuf_get_file_info(job.source.c_str(), &width, &height);
   if (format == nullptr || width <= 0 || height <= 0) {
     const std::string sniffed = SniffImageMime(job.source);
     if (NeedsLoaderPlugin(sniffed)) {
-      return Fail(job, NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_UNSUPPORTED,
+      return Fail(NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_UNSUPPORTED,
                   "No gdk-pixbuf loader for " + sniffed);
     }
-    return Fail(job, NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_FAILED,
+    return Fail(NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_FAILED,
                 "Unrecognized or unreadable image");
   }
   const std::string mime = MimeOf(job.source, format);
@@ -140,7 +123,7 @@ Outcome CompressImageFile(const ImageJob& job) {
                                             : NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_FAILED;
     std::string message = error != nullptr ? error->message : "Decoding failed";
     g_clear_error(&error);
-    return Fail(job, status, std::move(message));
+    return Fail(status, std::move(message));
   }
 
   GdkPixbuf* oriented = nullptr;
@@ -151,7 +134,7 @@ Outcome CompressImageFile(const ImageJob& job) {
   }
   g_object_unref(decoded);
   if (oriented == nullptr) {
-    return Fail(job, NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_FAILED, "Out of memory");
+    return Fail(NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_FAILED, "Out of memory");
   }
 
   const bool jpeg = job.format == NATIVE_MEDIA_COMPRESSOR_IMAGE_FORMAT_JPEG;
@@ -160,7 +143,7 @@ Outcome CompressImageFile(const ImageJob& job) {
     g_object_unref(oriented);
     oriented = flat;
     if (oriented == nullptr) {
-      return Fail(job, NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_FAILED, "Out of memory");
+      return Fail(NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_FAILED, "Out of memory");
     }
   }
 
@@ -168,26 +151,58 @@ Outcome CompressImageFile(const ImageJob& job) {
   if (jpeg) {
     g_autofree gchar* quality =
         g_strdup_printf("%d", static_cast<int>(std::clamp<int64_t>(job.quality, 0, 100)));
-    saved = gdk_pixbuf_save(oriented, job.destination.c_str(), "jpeg", &error, "quality", quality,
+    saved = gdk_pixbuf_save(oriented, output.c_str(), "jpeg", &error, "quality", quality,
                             nullptr);
   } else {
-    saved = gdk_pixbuf_save(oriented, job.destination.c_str(), "png", &error, nullptr);
+    saved = gdk_pixbuf_save(oriented, output.c_str(), "png", &error, nullptr);
   }
   Outcome outcome;
   if (saved) {
     outcome.status = NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_COMPRESSED;
     outcome.width = gdk_pixbuf_get_width(oriented);
     outcome.height = gdk_pixbuf_get_height(oriented);
-    outcome.size_bytes = FileSize(job.destination);
   } else {
-    outcome = Fail(job,
-                   IsUnknownType(error) ? NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_UNSUPPORTED
+    outcome = Fail(IsUnknownType(error) ? NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_UNSUPPORTED
                                         : NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_FAILED,
                    error != nullptr ? error->message : "Writing failed");
   }
   g_clear_error(&error);
   g_object_unref(oriented);
   return outcome;
+}
+
+}  // namespace
+
+std::optional<ImageInfo> ProbeImageFile(const std::string& path) {
+  try {
+    gint width = 0;
+    gint height = 0;
+    GdkPixbufFormat* format = gdk_pixbuf_get_file_info(path.c_str(), &width, &height);
+    if (format == nullptr || width <= 0 || height <= 0) return std::nullopt;
+    ImageInfo info;
+    info.mime_type = MimeOf(path, format);
+    const bool swapped = info.mime_type == "image/jpeg" && ReadJpegOrientation(path) >= 5;
+    info.width = swapped ? height : width;
+    info.height = swapped ? width : height;
+    info.frame_count = FrameCount(path, info.mime_type);
+    return info;
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+}
+
+Outcome CompressImageFile(const ImageJob& job) {
+  try {
+    // Unwinding deletes the temporary file too.
+    PendingOutput output(job.destination);
+    if (output.destination_is_directory()) {
+      return Outcome::Of(NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_FAILED,
+                         "The destination is a directory");
+    }
+    return output.Finish(Encode(job, output.path()));
+  } catch (const std::exception& error) {
+    return Outcome::Of(NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_FAILED, error.what());
+  }
 }
 
 }  // namespace native_media_compressor
