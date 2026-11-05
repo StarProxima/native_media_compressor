@@ -609,26 +609,32 @@ Outcome TranscodeVideo(const VideoJob& job, const std::atomic<bool>& cancelled,
   if (!IsMediaFoundationAvailable()) {
     return Outcome::Of(Status::kUnsupported, "Media Foundation is not installed");
   }
-  PendingOutput output(job.destination);
-  Outcome outcome;
-  {
-    MediaFoundationScope scope;
-    if (!scope.started()) {
-      return Outcome::Of(Status::kUnsupported, "Media Foundation failed to start");
+  // Unwinding releases Media Foundation and deletes the temporary file, so an
+  // exception ends only this operation instead of the app.
+  try {
+    PendingOutput output(job.destination);
+    Outcome outcome;
+    {
+      MediaFoundationScope scope;
+      if (!scope.started()) {
+        return Outcome::Of(Status::kUnsupported, "Media Foundation failed to start");
+      }
+      outcome = Run(job, output.path(), cancelled, on_progress);
     }
-    outcome = Run(job, output.path(), cancelled, on_progress);
+    if (outcome.status != Status::kCompressed) return outcome;
+    outcome.size_bytes = FileSize(output.path());
+    if (outcome.size_bytes <= 0) return Outcome::Of(Status::kFailed, "The encoder wrote no output");
+    if (job.max_bytes && outcome.size_bytes > *job.max_bytes) return Outcome::Of(Status::kTooLarge);
+    if (!output.Commit()) {
+      return Outcome::Of(Status::kFailed,
+                         DescribeHresult("Replacing the destination",
+                                         HRESULT_FROM_WIN32(GetLastError())));
+    }
+    on_progress(1.0);
+    return outcome;
+  } catch (...) {
+    return Outcome::Of(Status::kFailed, kUnexpectedError);
   }
-  if (outcome.status != Status::kCompressed) return outcome;
-  outcome.size_bytes = FileSize(output.path());
-  if (outcome.size_bytes <= 0) return Outcome::Of(Status::kFailed, "The encoder wrote no output");
-  if (job.max_bytes && outcome.size_bytes > *job.max_bytes) return Outcome::Of(Status::kTooLarge);
-  if (!output.Commit()) {
-    return Outcome::Of(Status::kFailed,
-                       DescribeHresult("Replacing the destination",
-                                       HRESULT_FROM_WIN32(GetLastError())));
-  }
-  on_progress(1.0);
-  return outcome;
 }
 
 std::optional<VideoInfo> ProbeVideoFile(const std::wstring& source) {
