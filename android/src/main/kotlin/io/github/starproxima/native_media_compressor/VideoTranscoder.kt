@@ -168,7 +168,7 @@ internal class VideoTranscoder(
 
             val pipeline = Pipeline(
                 videoExtractor, decoder, encoder, inputSurface, requireNotNull(frames), muxer, audio,
-                minFrameIntervalUs = maxFrameRate?.let { 1_000_000L / it } ?: 0L,
+                maxFrameRate = maxFrameRate,
                 durationUs = durationUs,
                 destination = destination,
             )
@@ -255,7 +255,7 @@ internal class VideoTranscoder(
         private val frames: DecodedFrames,
         private val muxer: MediaMuxer,
         private val audio: List<AudioCopy>,
-        private val minFrameIntervalUs: Long,
+        maxFrameRate: Int?,
         private val durationUs: Long,
         private val destination: File,
     ) {
@@ -264,12 +264,13 @@ internal class VideoTranscoder(
         private var isDecoderDone = false
         private var isEncoderDone = false
         private var muxerVideoTrack = -1
-        private var lastRenderedUs = Long.MIN_VALUE
+        private val frameSelector = FrameSelector(maxFrameRate)
         private var lastWrittenUs = 0L
         private var writtenSamples = 0
         private var reportedPercent = -1
 
-        val hasRendered get() = lastRenderedUs != Long.MIN_VALUE
+        var hasRendered = false
+            private set
 
         fun run() {
             while (!isEncoderDone) {
@@ -301,14 +302,12 @@ internal class VideoTranscoder(
             if (index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) frames.onOutputFormat(decoder.outputFormat)
             if (index < 0) return
             val time = info.presentationTimeUs
-            // Frames closer than the frame rate cap are dropped before the encoder.
-            val shouldRender = info.size > 0 &&
-                (lastRenderedUs == Long.MIN_VALUE || time - lastRenderedUs >= minFrameIntervalUs - FRAME_TOLERANCE_US)
+            val shouldRender = info.size > 0 && frameSelector.accept(time)
             frames.render(decoder, index, shouldRender)
             if (shouldRender) {
                 inputSurface.setPresentationTime(time * 1000)
                 inputSurface.swapBuffers()
-                lastRenderedUs = time
+                hasRendered = true
             }
             if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
                 encoder.signalEndOfInputStream()
@@ -397,7 +396,6 @@ internal class VideoTranscoder(
 
     private companion object {
         const val TIMEOUT_US = 10_000L
-        const val FRAME_TOLERANCE_US = 2_000L
         const val SIZE_CHECK_SAMPLES = 30
         const val DEFAULT_AUDIO_BUFFER = 256 * 1024
         const val DEFAULT_FRAME_RATE = 30
