@@ -18,9 +18,26 @@ set(PLUGIN_NAME "native_media_compressor_plugin")
 
 # Any new source files that you add to the plugin should be added here.
 list(APPEND PLUGIN_SOURCES
+  "image_codec.cpp"
+  "image_codec.h"
+  "media_common.cpp"
+  "media_common.h"
+  "messages.g.cpp"
+  "messages.g.h"
   "native_media_compressor_plugin.cpp"
   "native_media_compressor_plugin.h"
+  "task_queues.cpp"
+  "task_queues.h"
+  "video_transcoder.cpp"
+  "video_transcoder.h"
 )
+
+# Media Foundation is missing on Windows N without the Media Feature Pack.
+# Delay-loading its DLLs lets the plugin load there; the code checks that they
+# exist before the first call and reports video as unsupported otherwise. WIC
+# is part of every Windows edition and is linked normally.
+set(NMC_SYSTEM_LIBRARIES mfplat mfreadwrite mfuuid windowscodecs ole32 uuid delayimp)
+set(NMC_DELAY_LOAD_OPTIONS "/DELAYLOAD:mfplat.dll" "/DELAYLOAD:mfreadwrite.dll")
 
 # Define the plugin library target. Its name must not be changed (see comment
 # on PLUGIN_NAME above).
@@ -40,13 +57,15 @@ apply_standard_settings(${PLUGIN_NAME})
 # exported should be explicitly exported with the FLUTTER_PLUGIN_EXPORT macro.
 set_target_properties(${PLUGIN_NAME} PROPERTIES
   CXX_VISIBILITY_PRESET hidden)
-target_compile_definitions(${PLUGIN_NAME} PRIVATE FLUTTER_PLUGIN_IMPL)
+target_compile_definitions(${PLUGIN_NAME} PRIVATE FLUTTER_PLUGIN_IMPL NOMINMAX)
 
 # Source include directories and library dependencies. Add any plugin-specific
 # dependencies here.
 target_include_directories(${PLUGIN_NAME} INTERFACE
   "${CMAKE_CURRENT_SOURCE_DIR}/include")
-target_link_libraries(${PLUGIN_NAME} PRIVATE flutter flutter_wrapper_plugin)
+target_link_libraries(${PLUGIN_NAME} PRIVATE flutter flutter_wrapper_plugin
+  ${NMC_SYSTEM_LIBRARIES})
+target_link_options(${PLUGIN_NAME} PRIVATE ${NMC_DELAY_LOAD_OPTIONS})
 
 # List of absolute paths to libraries that should be bundled with the plugin.
 # This list could contain prebuilt libraries, or libraries created by an
@@ -85,9 +104,11 @@ add_executable(${TEST_RUNNER}
   ${PLUGIN_SOURCES}
 )
 apply_standard_settings(${TEST_RUNNER})
+target_compile_definitions(${TEST_RUNNER} PRIVATE NOMINMAX)
 target_include_directories(${TEST_RUNNER} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-target_link_libraries(${TEST_RUNNER} PRIVATE flutter_wrapper_plugin)
+target_link_libraries(${TEST_RUNNER} PRIVATE flutter_wrapper_plugin ${NMC_SYSTEM_LIBRARIES})
 target_link_libraries(${TEST_RUNNER} PRIVATE gtest_main gmock)
+target_link_options(${TEST_RUNNER} PRIVATE ${NMC_DELAY_LOAD_OPTIONS})
 # flutter_wrapper_plugin has link dependencies on the Flutter DLL.
 add_custom_command(TARGET ${TEST_RUNNER} POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
