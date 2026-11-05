@@ -136,6 +136,12 @@ jobs:
           Get-WindowsFeature -Name Server-Media-Foundation -ErrorAction SilentlyContinue
       - run: flutter test integration_test -d windows --reporter expanded
         working-directory: example
+      - name: Show application crashes
+        if: failure()
+        shell: pwsh
+        run: |
+          Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'Application Error', 'Windows Error Reporting' } -MaxEvents 10 -ErrorAction SilentlyContinue |
+            Format-List TimeCreated, Message
 
   minimum:
     name: Build with Flutter 3.29 and AGP 8
