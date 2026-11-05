@@ -170,49 +170,55 @@ ComPtr<IWICBitmapSource> DownsampledSource(IWICImagingFactory* factory,
   return bitmap;
 }
 
-HRESULT ApplyOrientation(IWICImagingFactory* factory, UINT orientation,
-                         ComPtr<IWICBitmapSource>* source) {
-  // Mirrored orientations are a rotation followed by a horizontal flip. They
-  // run as two steps so the order does not depend on how one flip-rotator
-  // combines both flags.
-  std::vector<WICBitmapTransformOptions> steps;
-  switch (orientation) {
-    case 2:
-      steps = {WICBitmapTransformFlipHorizontal};
-      break;
-    case 3:
-      steps = {WICBitmapTransformRotate180};
-      break;
-    case 4:
-      steps = {WICBitmapTransformFlipVertical};
-      break;
-    case 5:
-      steps = {WICBitmapTransformRotate90, WICBitmapTransformFlipHorizontal};
-      break;
-    case 6:
-      steps = {WICBitmapTransformRotate90};
-      break;
-    case 7:
-      steps = {WICBitmapTransformRotate270, WICBitmapTransformFlipHorizontal};
-      break;
-    case 8:
-      steps = {WICBitmapTransformRotate270};
-      break;
-    default:
-      break;
+// Turns pixels stored as `width` x `height` into the displayed picture for an
+// EXIF orientation. WIC's flip-rotator answers E_INVALIDARG for the sources
+// this pipeline produces, so the eight cases are done by hand.
+std::vector<BYTE> Reorient(const std::vector<BYTE>& stored, UINT width, UINT height,
+                           UINT orientation) {
+  const bool swaps_sides = orientation >= 5;
+  const UINT shown_width = swaps_sides ? height : width;
+  const UINT shown_height = swaps_sides ? width : height;
+  std::vector<BYTE> shown(stored.size());
+  for (UINT y = 0; y < shown_height; ++y) {
+    for (UINT x = 0; x < shown_width; ++x) {
+      UINT source_x = x;
+      UINT source_y = y;
+      switch (orientation) {
+        case 2:
+          source_x = width - 1 - x;
+          break;
+        case 3:
+          source_x = width - 1 - x;
+          source_y = height - 1 - y;
+          break;
+        case 4:
+          source_y = height - 1 - y;
+          break;
+        case 5:
+          source_x = y;
+          source_y = x;
+          break;
+        case 6:
+          source_x = y;
+          source_y = height - 1 - x;
+          break;
+        case 7:
+          source_x = width - 1 - y;
+          source_y = height - 1 - x;
+          break;
+        case 8:
+          source_x = width - 1 - y;
+          source_y = x;
+          break;
+        default:
+          break;
+      }
+      const BYTE* from = stored.data() + (static_cast<size_t>(source_y) * width + source_x) * 4;
+      BYTE* to = shown.data() + (static_cast<size_t>(y) * shown_width + x) * 4;
+      std::copy(from, from + 4, to);
+    }
   }
-  for (const WICBitmapTransformOptions step : steps) {
-    // The flip-rotator rejects a scaler, converter or another flip-rotator as
-    // its source with E_INVALIDARG; it needs pixels it can read in any order.
-    ComPtr<IWICBitmap> bitmap;
-    NMC_RETURN_HR_IF_FAILED(
-        factory->CreateBitmapFromSource(source->Get(), WICBitmapCacheOnLoad, &bitmap));
-    ComPtr<IWICBitmapFlipRotator> rotator;
-    NMC_RETURN_HR_IF_FAILED(factory->CreateBitmapFlipRotator(&rotator));
-    NMC_RETURN_HR_IF_FAILED(rotator->Initialize(bitmap.Get(), step));
-    *source = rotator;
-  }
-  return S_OK;
+  return shown;
 }
 
 Outcome Encode(IWICImagingFactory* factory, const ImageJob& job,
@@ -340,17 +346,18 @@ Outcome Run(const ImageJob& job, bool* needs_codec_extension) {
                          "Scaling the image");
     source = scaler;
   }
-  NMC_RETURN_IF_FAILED(ApplyOrientation(factory.Get(), image.orientation, &source),
-                       "Applying the orientation");
   NMC_RETURN_IF_FAILED(source->GetSize(&current_width, &current_height), "Reading the size");
-  if (current_width != out_width || current_height != out_height) {
+  if (current_width != stored_width || current_height != stored_height) {
     return Outcome::Of(Status::kFailed, "The image pipeline produced an unexpected size");
   }
 
   std::vector<BYTE> pixels(static_cast<size_t>(buffer_size));
-  NMC_RETURN_IF_FAILED(source->CopyPixels(nullptr, out_width * 4, static_cast<UINT>(buffer_size),
-                                          pixels.data()),
+  NMC_RETURN_IF_FAILED(source->CopyPixels(nullptr, stored_width * 4,
+                                          static_cast<UINT>(buffer_size), pixels.data()),
                        "Decoding the image");
+  if (image.orientation > 1) {
+    pixels = Reorient(pixels, stored_width, stored_height, image.orientation);
+  }
   return Encode(factory.Get(), job, pixels, out_width, out_height);
 }
 
