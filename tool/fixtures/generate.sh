@@ -38,7 +38,19 @@ ff -f lavfi -i "testsrc2=size=1280x720:rate=30:duration=1" \
   -x265-params "log-level=error:hdr10=1:colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc" \
   hdr10_hevc.mp4
 
+ff -f lavfi -i "testsrc2=size=1280x720:rate=30:duration=1" -f lavfi -i "$TONE:duration=1" \
+  -c:v libx265 -preset veryfast -b:v 1500k -pix_fmt yuv420p10le -tag:v hvc1 \
+  -color_primaries bt2020 -color_trc arib-std-b67 -colorspace bt2020nc \
+  -x265-params "log-level=error:colorprim=bt2020:transfer=arib-std-b67:colormatrix=bt2020nc" \
+  -c:a aac -b:a 128k hlg_hevc.mov
+
 ff -f lavfi -i "$TONE:duration=1" -c:a aac -b:a 128k audio_only.m4a
+
+# screen_ios.mov and screen_android.mp4 are real screen recordings from the iOS
+# simulator (`xcrun simctl io <device> recordVideo --codec=hevc`) and an
+# Android emulator (`adb shell screenrecord`), trimmed to two seconds. They are
+# kept as recorded because odd frame sizes, variable frame rate and extra data
+# tracks are the point.
 
 "$PYTHON" - <<'EOF'
 from PIL import Image, ImageDraw

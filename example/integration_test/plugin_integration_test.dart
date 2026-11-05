@@ -72,6 +72,17 @@ void main() {
       );
 
       expect(probe!.videoCodec, 'video/hevc');
+      expect(probe.isHdr, isFalse);
+    });
+
+    testWidgets('detects HDR transfer functions', (_) async {
+      for (final name in ['hdr10_hevc.mp4', 'hlg_hevc.mov']) {
+        final probe = await NativeMediaCompressor.probeVideo(
+          await _fixture(name),
+        );
+
+        expect(probe!.isHdr, isTrue, reason: name);
+      }
     });
 
     testWidgets('returns null for a file without video', (_) async {
@@ -196,20 +207,58 @@ void main() {
       expect(probe!.hasAudio, isFalse);
     });
 
-    testWidgets('HDR is either converted or unsupported', (_) async {
-      final destination = _out('hdr.mp4');
-      final result =
-          await NativeMediaCompressor.compressVideo(
-            source: await _fixture('hdr10_hevc.mp4'),
-            destination: destination,
-            options: const VideoOptions(maxShortSide: 360),
-          ).result;
+    testWidgets('converts HDR to SDR', (_) async {
+      for (final name in ['hdr10_hevc.mp4', 'hlg_hevc.mov']) {
+        final destination = _out('$name.mp4');
+        final result =
+            await NativeMediaCompressor.compressVideo(
+              source: await _fixture(name),
+              destination: destination,
+              options: const VideoOptions(maxShortSide: 360),
+            ).result;
 
-      expect(
-        result.status,
-        anyOf(CompressionStatus.compressed, CompressionStatus.unsupported),
-      );
-      if (!result.isCompressed) _expectAbsent(destination);
+        if (_fullCodecs) {
+          expect(result.status, CompressionStatus.compressed, reason: name);
+        } else {
+          expect(
+            result.status,
+            anyOf(CompressionStatus.compressed, CompressionStatus.unsupported),
+            reason: name,
+          );
+        }
+        if (result.isCompressed) {
+          final probe = await NativeMediaCompressor.probeVideo(destination);
+          expect(probe!.isHdr, isFalse, reason: name);
+          expect(probe.videoCodec, 'video/avc', reason: name);
+        } else {
+          _expectAbsent(destination);
+        }
+      }
+    });
+
+    testWidgets('compresses real screen recordings', (_) async {
+      for (final (name, short, long) in [
+        ('screen_ios.mov', 1206, 2622),
+        ('screen_android.mp4', 1080, 2400),
+      ]) {
+        final destination = _out('$name.mp4');
+        final result =
+            await NativeMediaCompressor.compressVideo(
+              source: await _fixture(name),
+              destination: destination,
+              options: const VideoOptions(maxShortSide: 720),
+            ).result;
+
+        if (!_fullCodecs && result.status == CompressionStatus.unsupported) {
+          continue;
+        }
+        expect(result.status, CompressionStatus.compressed, reason: name);
+        final (outShort, outLong) = _sides(result.width, result.height);
+        expect(outShort, inInclusiveRange(700, 720), reason: name);
+        expect(outLong / outShort, closeTo(long / short, 0.03), reason: name);
+        final probe = await NativeMediaCompressor.probeVideo(destination);
+        expect(probe!.width, lessThan(probe.height), reason: name);
+      }
     });
 
     testWidgets('stops when the output outgrows maxBytes', (_) async {

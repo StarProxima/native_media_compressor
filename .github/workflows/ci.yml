@@ -24,7 +24,7 @@ jobs:
           cache: true
       - run: flutter pub get
       - name: Formatting
-        run: dart format --output=none --set-exit-if-changed $(git ls-files '*.dart' | grep -v '\.g\.dart$')
+        run: git ls-files -z '*.dart' ':!:*.g.dart' | xargs -0 dart format --output=none --set-exit-if-changed
       - run: flutter analyze
       - run: flutter test
       - name: Generated bindings match the schema
@@ -85,6 +85,24 @@ jobs:
           xcrun simctl boot "$udid"
           echo "udid=$udid" >> "$GITHUB_OUTPUT"
       - run: flutter test integration_test -d ${{ steps.simulator.outputs.udid }} --reporter expanded
+        working-directory: example
+
+  cocoapods:
+    name: Build iOS and macOS with CocoaPods
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - name: Turn off Swift Package Manager for the example
+        run: |
+          sed -i '' 's/enable-swift-package-manager: true/enable-swift-package-manager: false/' example/pubspec.yaml
+      - run: flutter build ios --simulator --debug
+        working-directory: example
+      - run: flutter build macos --debug
         working-directory: example
 
   macos:
