@@ -45,6 +45,7 @@ void main() {
     expect(_parse(_fixture('alpha.png')), ('image/png', 1200, 800, 1));
     expect(_parse(_png()), ('image/png', 256, 200, 1));
     expect(_parse(_png(frames: 4)), ('image/png', 256, 200, 4));
+    expect(_parse(_fixture('animated.png')), ('image/png', 320, 240, 3));
   });
 
   test('counts GIF and WebP frames', () {
