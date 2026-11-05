@@ -163,7 +163,7 @@ final class WebVideoJob {
     final durationUs = _us(video.duration, video.timescale);
     final sourceRate =
         durationUs > 0 ? video.samples.length * 1e6 / durationUs : 30.0;
-    final maxRate = options.maxFrameRate;
+    final maxRate = options.maxFrameRate?.clamp(1, 240);
     final frameRate =
         maxRate != null && maxRate > 0 && maxRate < sourceRate
             ? maxRate.toDouble()
