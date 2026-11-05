@@ -1,28 +1,30 @@
-import 'dart:io';
-
-import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:native_media_compressor/native_media_compressor.dart';
-import 'package:path_provider/path_provider.dart';
+
+import 'support/test_files.dart' as files;
+
+final _isAndroid = !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
 /// Platforms whose system codecs must handle every common format. Elsewhere
 /// HEIC, WebP and some audio may legitimately be unsupported.
-final _fullCodecs = Platform.isAndroid || Platform.isIOS || Platform.isMacOS;
+final _fullCodecs =
+    !kIsWeb &&
+    const [
+      TargetPlatform.android,
+      TargetPlatform.iOS,
+      TargetPlatform.macOS,
+    ].contains(defaultTargetPlatform);
 
-late Directory _work;
+Future<String> _fixture(String name) => files.fixture(name);
 
-Future<String> _fixture(String name) async {
-  final file = File('${_work.path}/in-$name');
-  if (!file.existsSync()) {
-    final data = await rootBundle.load('integration_test/fixtures/$name');
-    await file.writeAsBytes(data.buffer.asUint8List(), flush: true);
-  }
+String _out(String name) => files.outputPath(name);
 
-  return file.path;
-}
-
-String _out(String name) => '${_work.path}/out-$name';
+/// Where a compressed result is: the destination, or an object URL on the
+/// web.
+String _at(CompressionResult result, String destination) =>
+    kIsWeb ? result.path! : destination;
 
 /// Short and long sides of a frame.
 (int, int) _sides(int? width, int? height) {
@@ -31,16 +33,19 @@ String _out(String name) => '${_work.path}/out-$name';
   return w < h ? (w, h) : (h, w);
 }
 
-void _expectAbsent(String path) =>
-    expect(File(path).existsSync(), isFalse, reason: '$path must not exist');
+void _expectAbsent(CompressionResult result, String destination) {
+  expect(result.path, isNull);
+  expect(
+    files.exists(destination),
+    isFalse,
+    reason: '$destination must not exist',
+  );
+}
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
-  setUpAll(() async {
-    final temp = await getTemporaryDirectory();
-    _work = await Directory('${temp.path}/nmc_test').create(recursive: true);
-  });
+  setUpAll(files.setUpFiles);
 
   group('probeVideo', () {
     testWidgets('reads size, duration and codecs', (_) async {
@@ -117,9 +122,10 @@ void main() {
       final result = await task.result;
 
       expect(result.status, CompressionStatus.compressed, reason: '$result');
-      expect(result.path, destination);
-      expect(result.sizeBytes, File(destination).lengthSync());
-      expect(result.sizeBytes, lessThan(File(source).lengthSync()));
+      expect(result.path, kIsWeb ? startsWith('blob:') : destination);
+      final output = _at(result, destination);
+      expect(result.sizeBytes, await files.sizeOf(output));
+      expect(result.sizeBytes, lessThan(await files.sizeOf(source)));
       final (short, long) = _sides(result.width, result.height);
       expect(short, inInclusiveRange(336, 360));
       expect(long / short, closeTo(16 / 9, 0.05));
@@ -128,7 +134,7 @@ void main() {
       expect(values, orderedEquals([...values]..sort()));
       expect(values.last, greaterThan(0.9));
 
-      final probe = await NativeMediaCompressor.probeVideo(destination);
+      final probe = await NativeMediaCompressor.probeVideo(output);
       expect(probe!.videoCodec, 'video/avc');
       expect(probe.hasAudio, isTrue);
       expect(probe.duration.inMilliseconds, closeTo(2000, 200));
@@ -145,7 +151,9 @@ void main() {
 
       expect(result.status, CompressionStatus.compressed, reason: '$result');
       expect(result.width!, lessThan(result.height!));
-      final probe = await NativeMediaCompressor.probeVideo(destination);
+      final probe = await NativeMediaCompressor.probeVideo(
+        _at(result, destination),
+      );
       expect(probe!.width, lessThan(probe.height));
     });
 
@@ -163,7 +171,9 @@ void main() {
         return;
       }
       expect(result.status, CompressionStatus.compressed, reason: '$result');
-      final probe = await NativeMediaCompressor.probeVideo(destination);
+      final probe = await NativeMediaCompressor.probeVideo(
+        _at(result, destination),
+      );
       expect(probe!.videoCodec, 'video/avc');
     });
 
@@ -178,7 +188,9 @@ void main() {
 
       if (_fullCodecs) {
         expect(result.status, CompressionStatus.compressed, reason: '$result');
-        final probe = await NativeMediaCompressor.probeVideo(destination);
+        final probe = await NativeMediaCompressor.probeVideo(
+          _at(result, destination),
+        );
         expect(probe!.hasAudio, isTrue);
       } else {
         expect(
@@ -206,12 +218,15 @@ void main() {
             options: const VideoOptions(maxShortSide: 360, includeAudio: false),
           ).result;
 
-      if (_fullCodecs) {
+      // The web copies AAC only, like the platforms with full codecs.
+      if (_fullCodecs || kIsWeb) {
         expect(withAudio.status, CompressionStatus.unsupported);
-        _expectAbsent(kept);
+        _expectAbsent(withAudio, kept);
       }
       expect(withoutAudio.status, CompressionStatus.compressed);
-      final probe = await NativeMediaCompressor.probeVideo(dropped);
+      final probe = await NativeMediaCompressor.probeVideo(
+        _at(withoutAudio, dropped),
+      );
       expect(probe!.hasAudio, isFalse);
     });
 
@@ -232,7 +247,7 @@ void main() {
               options: const VideoOptions(maxShortSide: 360),
             ).result;
 
-        if (_fullCodecs && !(needsMain10 && Platform.isAndroid)) {
+        if (_fullCodecs && !(needsMain10 && _isAndroid)) {
           expect(
             result.status,
             CompressionStatus.compressed,
@@ -246,11 +261,13 @@ void main() {
           );
         }
         if (result.isCompressed) {
-          final probe = await NativeMediaCompressor.probeVideo(destination);
+          final probe = await NativeMediaCompressor.probeVideo(
+            _at(result, destination),
+          );
           expect(probe!.isHdr, isFalse, reason: name);
           expect(probe.videoCodec, 'video/avc', reason: name);
         } else {
-          _expectAbsent(destination);
+          _expectAbsent(result, destination);
         }
       }
     });
@@ -279,7 +296,9 @@ void main() {
         final (outShort, outLong) = _sides(result.width, result.height);
         expect(outShort, inInclusiveRange(700, 720), reason: name);
         expect(outLong / outShort, closeTo(long / short, 0.03), reason: name);
-        final probe = await NativeMediaCompressor.probeVideo(destination);
+        final probe = await NativeMediaCompressor.probeVideo(
+          _at(result, destination),
+        );
         expect(probe!.width, lessThan(probe.height), reason: name);
       }
     });
@@ -298,7 +317,7 @@ void main() {
           ).result;
 
       expect(result.status, CompressionStatus.tooLarge);
-      _expectAbsent(destination);
+      _expectAbsent(result, destination);
     });
 
     testWidgets('cancel stops the work and leaves no file', (_) async {
@@ -309,9 +328,10 @@ void main() {
         options: const VideoOptions(maxShortSide: 1080),
       );
       await task.cancel();
+      final result = await task.result;
 
-      expect((await task.result).status, CompressionStatus.cancelled);
-      _expectAbsent(destination);
+      expect(result.status, CompressionStatus.cancelled);
+      _expectAbsent(result, destination);
     });
 
     testWidgets('a file without video is unsupported or failed', (_) async {
@@ -328,7 +348,7 @@ void main() {
           anyOf(CompressionStatus.unsupported, CompressionStatus.failed),
           reason: name,
         );
-        _expectAbsent(destination);
+        _expectAbsent(result, destination);
       }
     });
 
@@ -353,7 +373,7 @@ void main() {
 
     testWidgets('replaces an existing destination', (_) async {
       final destination = _out('existing.mp4');
-      File(destination).writeAsStringSync('stale');
+      files.writeStale(destination);
 
       final result =
           await NativeMediaCompressor.compressVideo(
@@ -363,7 +383,7 @@ void main() {
           ).result;
 
       expect(result.status, CompressionStatus.compressed);
-      expect(File(destination).lengthSync(), greaterThan(1000));
+      expect(await files.sizeOf(_at(result, destination)), greaterThan(1000));
     });
   });
 
@@ -423,8 +443,9 @@ void main() {
 
       expect(result.status, CompressionStatus.compressed, reason: '$result');
       expect((result.width, result.height), (600, 800));
-      expect(result.sizeBytes, File(destination).lengthSync());
-      final probe = await NativeMediaCompressor.probeImage(destination);
+      final output = _at(result, destination);
+      expect(result.sizeBytes, await files.sizeOf(output));
+      final probe = await NativeMediaCompressor.probeImage(output);
       expect((probe!.width, probe.height), (600, 800));
       expect(probe.mimeType, 'image/jpeg');
     });
@@ -459,7 +480,9 @@ void main() {
       );
 
       expect((result.width, result.height), (600, 400));
-      final probe = await NativeMediaCompressor.probeImage(destination);
+      final probe = await NativeMediaCompressor.probeImage(
+        _at(result, destination),
+      );
       expect(probe!.mimeType, 'image/png');
     });
 
@@ -471,7 +494,9 @@ void main() {
       );
 
       expect(result.status, CompressionStatus.compressed, reason: '$result');
-      final probe = await NativeMediaCompressor.probeImage(destination);
+      final probe = await NativeMediaCompressor.probeImage(
+        _at(result, destination),
+      );
       expect((probe!.width, probe.height, probe.frameCount), (320, 240, 1));
     });
 
@@ -512,7 +537,7 @@ void main() {
         result.status,
         anyOf(CompressionStatus.failed, CompressionStatus.unsupported),
       );
-      _expectAbsent(destination);
+      _expectAbsent(result, destination);
     });
   });
 }
