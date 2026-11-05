@@ -30,12 +30,15 @@ internal object Scaling {
         )
     }
 
-    // Hardware H.264 encoders reliably accept only sizes that are multiples of 16.
-    fun videoSize(size: Size, maxShortSide: Long?, maxLongSide: Long?): Size {
+    /** Scaled size with each side rounded down to a multiple of what the encoder requires. */
+    fun videoSize(size: Size, maxShortSide: Long?, maxLongSide: Long?, widthAlignment: Int, heightAlignment: Int): Size {
         val scale = factor(size, maxShortSide, maxLongSide)
-        return Size(alignDownTo16(size.width * scale), alignDownTo16(size.height * scale))
+        return Size(alignDown(size.width * scale, widthAlignment), alignDown(size.height * scale, heightAlignment))
     }
 
-    // The epsilon keeps 639.9999 from a 1/3 factor at 640.
-    private fun alignDownTo16(value: Double): Int = max(16, ((value + 1e-6).toInt() / 16) * 16)
+    // The epsilon keeps 639.9999 from a 1/3 factor at 640. 4:2:0 frames need even sides.
+    private fun alignDown(value: Double, alignment: Int): Int {
+        val step = max(2, alignment)
+        return max(step, ((value + 1e-6).toInt() / step) * step)
+    }
 }
