@@ -132,7 +132,10 @@ Outcome CompressImageFile(const ImageJob& job) {
   GdkPixbuf* decoded = gdk_pixbuf_new_from_file_at_scale(job.source.c_str(), target_width,
                                                          target_height, FALSE, &error);
   if (decoded == nullptr) {
-    const NmcCompressionStatus status = IsUnknownType(error)
+    // The HEIF and WebP loaders recognize the file but decode through
+    // separately packaged codecs (libheif plugins), so a decoding error there
+    // usually means the codec is not installed.
+    const NmcCompressionStatus status = IsUnknownType(error) || NeedsLoaderPlugin(mime)
                                             ? NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_UNSUPPORTED
                                             : NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_FAILED;
     std::string message = error != nullptr ? error->message : "Decoding failed";
