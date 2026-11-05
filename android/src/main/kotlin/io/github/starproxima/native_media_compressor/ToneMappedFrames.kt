@@ -20,7 +20,7 @@ internal class ToneMappedFrames(private val width: Int, private val height: Int,
     private val positionHandle = GLES20.glGetAttribLocation(program, "aPosition")
     private val texCoordHandle = GLES20.glGetAttribLocation(program, "aTexCoord")
     private val transferHandle = GLES20.glGetUniformLocation(program, "uTransfer")
-    private val fullRangeHandle = GLES20.glGetUniformLocation(program, "uFullRange")
+    private val levelsHandle = GLES20.glGetUniformLocation(program, "uLevels")
     init {
         GLES20.glUseProgram(program)
     }
@@ -47,7 +47,7 @@ internal class ToneMappedFrames(private val width: Int, private val height: Int,
         planes[2].upload(image.planes[2], crop.left / 2, crop.top / 2, chroma, sampleBytes)
         GLES20.glViewport(0, 0, width, height)
         GLES20.glUniform1i(transferHandle, transfer.shaderCode)
-        GLES20.glUniform1f(fullRangeHandle, if (isFullRange) 1f else 0f)
+        GLES20.glUniform4fv(levelsHandle, 1, SampleLevels.of(sampleBytes, isFullRange), 0)
         quad.position(0)
         GLES20.glVertexAttribPointer(positionHandle, 2, GLES20.GL_FLOAT, false, STRIDE, quad)
         GLES20.glEnableVertexAttribArray(positionHandle)
@@ -185,7 +185,8 @@ internal class ToneMappedFrames(private val width: Int, private val height: Int,
             uniform vec4 uUWeights;
             uniform vec4 uVWeights;
             uniform int uTransfer;
-            uniform float uFullRange;
+            // Luma black and range, chroma center and range, all as decoded samples.
+            uniform vec4 uLevels;
 
             const float SOURCE_PEAK = 1000.0;
             const float SDR_WHITE = 100.0;
@@ -255,12 +256,8 @@ internal class ToneMappedFrames(private val width: Int, private val height: Int,
             void main() {
                 float y = bilinear(sY, uYWeights, uYSize, vTexCoord);
                 vec2 c = vec2(bilinear(sU, uUWeights, uUSize, vTexCoord), bilinear(sV, uVWeights, uVSize, vTexCoord));
-                if (uFullRange > 0.5) {
-                    c -= 0.5;
-                } else {
-                    y = (y - 16.0 / 255.0) / (219.0 / 255.0);
-                    c = (c - 128.0 / 255.0) / (224.0 / 255.0);
-                }
+                y = (y - uLevels.x) / uLevels.y;
+                c = (c - uLevels.z) / uLevels.w;
                 vec3 e = clamp(vec3(y + 1.4746 * c.y, y - 0.16455 * c.x - 0.57135 * c.y, y + 1.8814 * c.x), 0.0, 1.0);
                 vec3 nits = uTransfer == 1 ? pqToNits(e) : hlgToNits(e);
                 float signal = max(max(nits.r, nits.g), max(nits.b, 1e-3));
