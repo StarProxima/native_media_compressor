@@ -147,7 +147,7 @@ void NativeMediaCompressorPlugin::ProbeVideo(
     std::optional<VideoProbe> probe;
     if (const auto info = ProbeVideoFile(path)) {
       probe.emplace(info->width, info->height, info->rotation_degrees, info->duration_ms,
-                    info->has_audio);
+                    info->is_hdr, info->has_audio);
       if (info->bitrate) probe->set_bitrate(*info->bitrate);
       if (info->video_codec) probe->set_video_codec(*info->video_codec);
       if (info->audio_codec) probe->set_audio_codec(*info->audio_codec);

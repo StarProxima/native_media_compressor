@@ -144,6 +144,13 @@ std::string AudioCodecName(const GUID& subtype) {
   return GuidText(subtype);
 }
 
+bool IsHdr(IMFMediaType* type) {
+  const UINT32 transfer = MFGetAttributeUINT32(type, MF_MT_TRANSFER_FUNCTION,
+                                               static_cast<UINT32>(MFVideoTransFunc_Unknown));
+  return transfer == static_cast<UINT32>(MFVideoTransFunc_2084) ||
+         transfer == static_cast<UINT32>(MFVideoTransFunc_HLG);
+}
+
 UINT32 NormalizeRotation(UINT32 degrees) {
   switch (degrees % 360) {
     case 90:
@@ -334,10 +341,7 @@ Outcome Run(const VideoJob& job, const std::atomic<bool>& cancelled,
   if (width == 0 || height == 0) {
     return Outcome::Of(Status::kUnsupported, "The video track has no frame size");
   }
-  const UINT32 transfer = MFGetAttributeUINT32(native_video.Get(), MF_MT_TRANSFER_FUNCTION,
-                                               static_cast<UINT32>(MFVideoTransFunc_Unknown));
-  if (transfer == static_cast<UINT32>(MFVideoTransFunc_2084) ||
-      transfer == static_cast<UINT32>(MFVideoTransFunc_HLG)) {
+  if (IsHdr(native_video.Get())) {
     return Outcome::Of(Status::kUnsupported, "HDR video is not converted");
   }
 
@@ -649,6 +653,7 @@ std::optional<VideoInfo> ProbeVideoFile(const std::wstring& source) {
   info.width = quarter_turn ? height : width;
   info.height = quarter_turn ? width : height;
   info.rotation_degrees = rotation;
+  info.is_hdr = IsHdr(video.Get());
   info.duration_ms = Duration(reader.Get()) / 10000;
   GUID video_subtype = GUID_NULL;
   if (SUCCEEDED(video->GetGUID(MF_MT_SUBTYPE, &video_subtype))) {

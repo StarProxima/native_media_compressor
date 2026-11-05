@@ -28,6 +28,7 @@ struct VideoInfo {
   int64_t duration_ms = 0;
   std::optional<int64_t> bitrate;
   std::optional<std::string> video_codec;
+  bool is_hdr = false;
   bool has_audio = false;
   std::optional<std::string> audio_codec;
 };
