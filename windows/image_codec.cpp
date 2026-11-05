@@ -115,9 +115,27 @@ std::optional<std::string> MimeType(IWICBitmapDecoder* decoder, const std::wstri
   return WideToUtf8(first);
 }
 
-bool NeedsCodecExtension(const std::optional<std::string>& mime_type) {
-  return mime_type && (*mime_type == "image/heic" || *mime_type == "image/heif" ||
-                       *mime_type == "image/avif" || *mime_type == "image/webp");
+bool IsWebp(const std::wstring& path) {
+  HANDLE file = CreateFileW(path.c_str(), GENERIC_READ,
+                            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (file == INVALID_HANDLE_VALUE) return false;
+  char header[12] = {};
+  DWORD bytes_read = 0;
+  const BOOL ok = ReadFile(file, header, static_cast<DWORD>(sizeof(header)), &bytes_read, nullptr);
+  CloseHandle(file);
+  return ok && bytes_read == sizeof(header) && std::string(header, 4) == "RIFF" &&
+         std::string(header + 8, 4) == "WEBP";
+}
+
+// Without the Store extension WIC has no decoder at all, so the decoder cannot
+// name the format; the file signature can.
+bool NeedsCodecExtension(const std::optional<std::string>& mime_type, const std::wstring& path) {
+  if (mime_type) {
+    return *mime_type == "image/heic" || *mime_type == "image/heif" ||
+           *mime_type == "image/avif" || *mime_type == "image/webp";
+  }
+  return !HeifBrand(path).empty() || IsWebp(path);
 }
 
 HRESULT OpenImage(IWICImagingFactory* factory, const std::wstring& path, OpenedImage* image) {
@@ -302,7 +320,7 @@ Outcome Run(const ImageJob& job, bool* needs_codec_extension) {
                        "Creating the WIC factory");
   OpenedImage image;
   const HRESULT open_result = OpenImage(factory.Get(), job.source, &image);
-  *needs_codec_extension = NeedsCodecExtension(image.mime_type);
+  *needs_codec_extension = NeedsCodecExtension(image.mime_type, job.source);
   if (open_result == WINCODEC_ERR_COMPONENTNOTFOUND) {
     return Outcome::Of(Status::kUnsupported, "No installed WIC decoder reads this file");
   }
