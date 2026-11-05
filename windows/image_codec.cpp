@@ -385,27 +385,33 @@ Outcome CompressImageFile(const ImageJob& job) {
   if (IsDirectory(job.destination)) {
     return Outcome::Of(Status::kFailed, "The destination is a directory");
   }
-  PendingOutput output(job.destination);
-  Outcome outcome;
-  {
-    ComScope com;
-    bool needs_codec_extension = false;
-    outcome = Run(job, output.path(), &needs_codec_extension);
-    // A Store codec extension can be partly installed (HEIF without HEVC) and
-    // then fail midway; that is a missing codec, not a broken file.
-    if (outcome.status == Status::kFailed && needs_codec_extension) {
-      outcome.status = Status::kUnsupported;
+  // Pixel buffers of a huge image can fail to allocate. Unwinding releases WIC
+  // and deletes the temporary file, so that ends only this operation.
+  try {
+    PendingOutput output(job.destination);
+    Outcome outcome;
+    {
+      ComScope com;
+      bool needs_codec_extension = false;
+      outcome = Run(job, output.path(), &needs_codec_extension);
+      // A Store codec extension can be partly installed (HEIF without HEVC)
+      // and then fail midway; that is a missing codec, not a broken file.
+      if (outcome.status == Status::kFailed && needs_codec_extension) {
+        outcome.status = Status::kUnsupported;
+      }
     }
+    if (outcome.status != Status::kCompressed) return outcome;
+    outcome.size_bytes = FileSize(output.path());
+    if (outcome.size_bytes <= 0) return Outcome::Of(Status::kFailed, "The encoder wrote no output");
+    if (!output.Commit()) {
+      return Outcome::Of(Status::kFailed,
+                         DescribeHresult("Replacing the destination",
+                                         HRESULT_FROM_WIN32(GetLastError())));
+    }
+    return outcome;
+  } catch (...) {
+    return Outcome::Of(Status::kFailed, kUnexpectedError);
   }
-  if (outcome.status != Status::kCompressed) return outcome;
-  outcome.size_bytes = FileSize(output.path());
-  if (outcome.size_bytes <= 0) return Outcome::Of(Status::kFailed, "The encoder wrote no output");
-  if (!output.Commit()) {
-    return Outcome::Of(Status::kFailed,
-                       DescribeHresult("Replacing the destination",
-                                       HRESULT_FROM_WIN32(GetLastError())));
-  }
-  return outcome;
 }
 
 std::optional<ImageInfo> ProbeImageFile(const std::wstring& source) {

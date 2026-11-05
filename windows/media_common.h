@@ -30,6 +30,11 @@ struct Outcome {
   static Outcome Compressed(int64_t width, int64_t height);
 };
 
+// Message for an operation stopped by a C++ exception, in practice an
+// allocation that failed on a huge frame or image.
+inline constexpr char kUnexpectedError[] =
+    "Stopped by an unexpected error, such as running out of memory";
+
 struct SizeBounds {
   std::optional<int64_t> max_short_side;
   std::optional<int64_t> max_long_side;
