@@ -202,9 +202,14 @@ HRESULT ApplyOrientation(IWICImagingFactory* factory, UINT orientation,
       break;
   }
   for (const WICBitmapTransformOptions step : steps) {
+    // The flip-rotator rejects a scaler, converter or another flip-rotator as
+    // its source with E_INVALIDARG; it needs pixels it can read in any order.
+    ComPtr<IWICBitmap> bitmap;
+    NMC_RETURN_HR_IF_FAILED(
+        factory->CreateBitmapFromSource(source->Get(), WICBitmapCacheOnLoad, &bitmap));
     ComPtr<IWICBitmapFlipRotator> rotator;
     NMC_RETURN_HR_IF_FAILED(factory->CreateBitmapFlipRotator(&rotator));
-    NMC_RETURN_HR_IF_FAILED(rotator->Initialize(source->Get(), step));
+    NMC_RETURN_HR_IF_FAILED(rotator->Initialize(bitmap.Get(), step));
     *source = rotator;
   }
   return S_OK;
