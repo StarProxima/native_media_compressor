@@ -16,7 +16,14 @@ public final class NativeMediaCompressorPlugin: NSObject, FlutterPlugin, MediaCo
     queue.qualityOfService = .userInitiated
     return queue
   }()
-  private let workQueue = DispatchQueue.global(qos: .userInitiated)
+  // A batch of 48 MP photos decoded all at once would exhaust memory and get
+  // the app killed.
+  private let imageQueue: OperationQueue = {
+    let queue = OperationQueue()
+    queue.maxConcurrentOperationCount = 2
+    queue.qualityOfService = .userInitiated
+    return queue
+  }()
   // Touched only on the platform thread.
   private var cancelFlags: [Int64: CancelFlag] = [:]
 
@@ -58,7 +65,7 @@ public final class NativeMediaCompressorPlugin: NSObject, FlutterPlugin, MediaCo
   func compressImage(
     request: ImageRequest, completion: @escaping (Result<CompressionReply, Error>) -> Void
   ) {
-    workQueue.async {
+    imageQueue.addOperation {
       let reply = ImageCodec.compress(request)
       DispatchQueue.main.async { completion(.success(reply)) }
     }
@@ -69,7 +76,7 @@ public final class NativeMediaCompressorPlugin: NSObject, FlutterPlugin, MediaCo
   }
 
   func probeImage(source: String, completion: @escaping (Result<ImageProbe?, Error>) -> Void) {
-    workQueue.async {
+    imageQueue.addOperation {
       let probe = ImageCodec.probe(source)
       DispatchQueue.main.async { completion(.success(probe)) }
     }
