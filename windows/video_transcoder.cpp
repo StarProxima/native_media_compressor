@@ -365,6 +365,7 @@ Outcome Run(const VideoJob& job, const std::wstring& output,
     rate_numerator = 30;
     rate_denominator = 1;
   }
+  const LONGLONG source_frame_duration = kTicksPerSecond * rate_denominator / rate_numerator;
   LONGLONG frame_interval = 0;
   if (job.max_frame_rate && *job.max_frame_rate > 0) {
     const UINT32 limit = static_cast<UINT32>(std::min<int64_t>(*job.max_frame_rate, 1000));
@@ -525,6 +526,33 @@ Outcome Run(const VideoJob& job, const std::wstring& output,
     return std::max(total, FileSize(output));
   };
 
+  auto write_frame = [&](IMFSample* frame) -> HRESULT {
+    if (pixel_rotation == 0) return writer->WriteSample(video_index, frame);
+    ComPtr<IMFSample> rotated;
+    NMC_RETURN_HR_IF_FAILED(RotateNv12Sample(frame, decode_width, decode_height, decoded_stride,
+                                             pixel_rotation, &rotated));
+    return writer->WriteSample(video_index, rotated.Get());
+  };
+
+  // With a frame-rate cap the last kept frame waits until the next kept frame
+  // or the end of the stream is known. Only when frames between them were
+  // thinned out does its duration grow to cover them; otherwise the source
+  // duration stays, and the final frame still reaches the end of the stream.
+  ComPtr<IMFSample> held_frame;
+  LONGLONG held_time = 0;
+  LONGLONG held_end = 0;
+  bool thinned_after_held = false;
+  auto write_held_frame = [&](LONGLONG end) -> HRESULT {
+    if (!held_frame) return S_OK;
+    if (thinned_after_held) {
+      NMC_RETURN_HR_IF_FAILED(held_frame->SetSampleDuration(end - held_time));
+    }
+    const HRESULT result = write_frame(held_frame.Get());
+    held_frame.Reset();
+    thinned_after_held = false;
+    return result;
+  };
+
   NMC_RETURN_IF_FAILED(writer->BeginWriting(), "Starting the encoder");
   bool video_done = false;
   bool audio_done = !has_audio;
@@ -550,7 +578,12 @@ Outcome Run(const VideoJob& job, const std::wstring& output,
       return Outcome::Of(Status::kFailed, "The source reader reported a stream error");
     }
     const DWORD stream = is_video ? video_index : audio_index;
+    bool wrote = false;
     if (flags & MF_SOURCE_READERF_STREAMTICK) {
+      if (is_video && held_frame) {
+        NMC_RETURN_IF_FAILED(write_held_frame(held_end), "Writing a frame");
+        wrote = true;
+      }
       NMC_RETURN_IF_FAILED(writer->SendStreamTick(stream, timestamp), "Writing a stream gap");
     }
     if (flags & MF_SOURCE_READERF_ENDOFSTREAM) {
@@ -565,27 +598,41 @@ Outcome Run(const VideoJob& job, const std::wstring& output,
     } else {
       audio_time = timestamp;
     }
-    if (!sample) continue;
 
-    if (is_video) {
-      if (frame_interval > 0) {
-        if (kept_any_frame && timestamp < next_frame_time - frame_tolerance) continue;
+    if (sample && !is_video) {
+      NMC_RETURN_IF_FAILED(writer->WriteSample(stream, sample.Get()), "Writing a sample");
+      wrote = true;
+    } else if (sample && frame_interval == 0) {
+      NMC_RETURN_IF_FAILED(write_frame(sample.Get()), "Writing a frame");
+      wrote = true;
+    } else if (sample) {
+      LONGLONG sample_duration = 0;
+      if (FAILED(sample->GetSampleDuration(&sample_duration)) || sample_duration <= 0) {
+        sample_duration = source_frame_duration;
+      }
+      if (kept_any_frame && timestamp < next_frame_time - frame_tolerance) {
+        held_end = std::max(held_end, timestamp + sample_duration);
+        thinned_after_held = held_frame.Get() != nullptr;
+      } else {
         next_frame_time = kept_any_frame
                               ? std::max(next_frame_time + frame_interval,
                                          timestamp + frame_interval - frame_tolerance)
                               : timestamp + frame_interval;
         kept_any_frame = true;
-        sample->SetSampleDuration(frame_interval);
-      }
-      if (pixel_rotation != 0) {
-        ComPtr<IMFSample> rotated;
-        NMC_RETURN_IF_FAILED(RotateNv12Sample(sample.Get(), decode_width, decode_height,
-                                              decoded_stride, pixel_rotation, &rotated),
-                             "Rotating a frame");
-        sample = rotated;
+        if (held_frame) {
+          NMC_RETURN_IF_FAILED(write_held_frame(timestamp), "Writing a frame");
+          wrote = true;
+        }
+        held_frame = sample;
+        held_time = timestamp;
+        held_end = timestamp + sample_duration;
       }
     }
-    NMC_RETURN_IF_FAILED(writer->WriteSample(stream, sample.Get()), "Writing a sample");
+    if (is_video && video_done && held_frame) {
+      NMC_RETURN_IF_FAILED(write_held_frame(held_end), "Writing a frame");
+      wrote = true;
+    }
+    if (!wrote) continue;
 
     ++written_samples;
     if (job.max_bytes && written_samples % kSizeCheckInterval == 0 &&
