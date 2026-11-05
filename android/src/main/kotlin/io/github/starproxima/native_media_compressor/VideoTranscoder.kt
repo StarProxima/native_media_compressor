@@ -9,6 +9,7 @@ import android.media.MediaFormat
 import android.media.MediaMuxer
 import android.os.Build
 import java.io.File
+import java.io.IOException
 import java.nio.ByteBuffer
 
 /**
@@ -30,20 +31,24 @@ internal class VideoTranscoder(
     private val maxBytes = request.maxBytes?.takeIf { it > 0 } ?: Long.MAX_VALUE
 
     fun run(): CompressionReply {
-        val destination = File(request.destination)
-        destination.delete()
+        if (isCancelled()) return CompressionReply(CompressionStatus.CANCELLED)
+        val output = try {
+            StagedOutput.create(request.destination)
+        } catch (error: IOException) {
+            return CompressionReply(CompressionStatus.FAILED, message = error.toString())
+        }
         var reply = CompressionReply(CompressionStatus.FAILED)
         try {
             val size = try {
-                transcode(destination, shaderTransfer = null)
+                transcode(output.file, shaderTransfer = null)
             } catch (restart: ToneMapInShader) {
-                transcode(destination, restart.transfer)
+                transcode(output.file, restart.transfer)
             }
             reply = CompressionReply(
                 CompressionStatus.COMPRESSED,
                 width = size.width.toLong(),
                 height = size.height.toLong(),
-                sizeBytes = destination.length(),
+                sizeBytes = output.file.length(),
             )
         } catch (stop: Stop) {
             reply = CompressionReply(stop.status, message = stop.message)
@@ -52,9 +57,9 @@ internal class VideoTranscoder(
         } catch (error: Exception) {
             reply = CompressionReply(CompressionStatus.FAILED, message = error.toString())
         } finally {
-            if (reply.status != CompressionStatus.COMPRESSED) destination.delete()
+            if (reply.status != CompressionStatus.COMPRESSED) output.discard()
         }
-        return reply
+        return output.finish(reply)
     }
 
     /**
