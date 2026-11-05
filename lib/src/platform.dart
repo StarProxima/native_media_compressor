@@ -158,6 +158,7 @@ class PigeonMediaCompressor extends NativeMediaCompressorPlatform
         bitrate: probe.bitrate,
         videoCodec: probe.videoCodec,
         hasAudio: probe.hasAudio,
+        isHdr: probe.isHdr,
         audioCodec: probe.audioCodec,
       );
     } on PlatformException {

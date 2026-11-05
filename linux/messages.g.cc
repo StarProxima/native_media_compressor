@@ -867,6 +867,7 @@ struct _NmcVideoProbe {
   int64_t duration_ms;
   int64_t* bitrate;
   gchar* video_codec;
+  gboolean is_hdr;
   gboolean has_audio;
   gchar* audio_codec;
 };
@@ -888,7 +889,7 @@ static void nmc_video_probe_class_init(NmcVideoProbeClass* klass) {
   G_OBJECT_CLASS(klass)->dispose = nmc_video_probe_dispose;
 }
 
-NmcVideoProbe* nmc_video_probe_new(int64_t width, int64_t height, int64_t rotation_degrees, int64_t duration_ms, int64_t* bitrate, const gchar* video_codec, gboolean has_audio, const gchar* audio_codec) {
+NmcVideoProbe* nmc_video_probe_new(int64_t width, int64_t height, int64_t rotation_degrees, int64_t duration_ms, int64_t* bitrate, const gchar* video_codec, gboolean is_hdr, gboolean has_audio, const gchar* audio_codec) {
   NmcVideoProbe* self = NMC_VIDEO_PROBE(g_object_new(nmc_video_probe_get_type(), nullptr));
   self->width = width;
   self->height = height;
@@ -907,6 +908,7 @@ NmcVideoProbe* nmc_video_probe_new(int64_t width, int64_t height, int64_t rotati
   else {
     self->video_codec = nullptr;
   }
+  self->is_hdr = is_hdr;
   self->has_audio = has_audio;
   if (audio_codec != nullptr) {
     self->audio_codec = g_strdup(audio_codec);
@@ -947,6 +949,11 @@ const gchar* nmc_video_probe_get_video_codec(NmcVideoProbe* self) {
   return self->video_codec;
 }
 
+gboolean nmc_video_probe_get_is_hdr(NmcVideoProbe* self) {
+  g_return_val_if_fail(NMC_IS_VIDEO_PROBE(self), FALSE);
+  return self->is_hdr;
+}
+
 gboolean nmc_video_probe_get_has_audio(NmcVideoProbe* self) {
   g_return_val_if_fail(NMC_IS_VIDEO_PROBE(self), FALSE);
   return self->has_audio;
@@ -965,6 +972,7 @@ static FlValue* nmc_video_probe_to_list(NmcVideoProbe* self) {
   fl_value_append_take(values, fl_value_new_int(self->duration_ms));
   fl_value_append_take(values, self->bitrate != nullptr ? fl_value_new_int(*self->bitrate) : fl_value_new_null());
   fl_value_append_take(values, self->video_codec != nullptr ? fl_value_new_string(self->video_codec) : fl_value_new_null());
+  fl_value_append_take(values, fl_value_new_bool(self->is_hdr));
   fl_value_append_take(values, fl_value_new_bool(self->has_audio));
   fl_value_append_take(values, self->audio_codec != nullptr ? fl_value_new_string(self->audio_codec) : fl_value_new_null());
   return values;
@@ -992,13 +1000,15 @@ static NmcVideoProbe* nmc_video_probe_new_from_list(FlValue* values) {
     video_codec = fl_value_get_string(value5);
   }
   FlValue* value6 = fl_value_get_list_value(values, 6);
-  gboolean has_audio = fl_value_get_bool(value6);
+  gboolean is_hdr = fl_value_get_bool(value6);
   FlValue* value7 = fl_value_get_list_value(values, 7);
+  gboolean has_audio = fl_value_get_bool(value7);
+  FlValue* value8 = fl_value_get_list_value(values, 8);
   const gchar* audio_codec = nullptr;
-  if (fl_value_get_type(value7) != FL_VALUE_TYPE_NULL) {
-    audio_codec = fl_value_get_string(value7);
+  if (fl_value_get_type(value8) != FL_VALUE_TYPE_NULL) {
+    audio_codec = fl_value_get_string(value8);
   }
-  return nmc_video_probe_new(width, height, rotation_degrees, duration_ms, bitrate, video_codec, has_audio, audio_codec);
+  return nmc_video_probe_new(width, height, rotation_degrees, duration_ms, bitrate, video_codec, is_hdr, has_audio, audio_codec);
 }
 
 gboolean nmc_video_probe_equals(NmcVideoProbe* a, NmcVideoProbe* b) {
@@ -1029,6 +1039,9 @@ gboolean nmc_video_probe_equals(NmcVideoProbe* a, NmcVideoProbe* b) {
   if (g_strcmp0(a->video_codec, b->video_codec) != 0) {
     return FALSE;
   }
+  if (a->is_hdr != b->is_hdr) {
+    return FALSE;
+  }
   if (a->has_audio != b->has_audio) {
     return FALSE;
   }
@@ -1047,6 +1060,7 @@ guint nmc_video_probe_hash(NmcVideoProbe* self) {
   result = result * 31 + static_cast<guint>(self->duration_ms);
   result = result * 31 + (self->bitrate != nullptr ? static_cast<guint>(*self->bitrate) : 0);
   result = result * 31 + (self->video_codec != nullptr ? g_str_hash(self->video_codec) : 0);
+  result = result * 31 + static_cast<guint>(self->is_hdr);
   result = result * 31 + static_cast<guint>(self->has_audio);
   result = result * 31 + (self->audio_codec != nullptr ? g_str_hash(self->audio_codec) : 0);
   return result;

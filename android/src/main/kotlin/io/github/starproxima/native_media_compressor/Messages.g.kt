@@ -441,6 +441,7 @@ data class VideoProbe (
   val durationMs: Long,
   val bitrate: Long? = null,
   val videoCodec: String? = null,
+  val isHdr: Boolean,
   val hasAudio: Boolean,
   val audioCodec: String? = null
 )
@@ -453,9 +454,10 @@ data class VideoProbe (
       val durationMs = pigeonVar_list[3] as Long
       val bitrate = pigeonVar_list[4] as Long?
       val videoCodec = pigeonVar_list[5] as String?
-      val hasAudio = pigeonVar_list[6] as Boolean
-      val audioCodec = pigeonVar_list[7] as String?
-      return VideoProbe(width, height, rotationDegrees, durationMs, bitrate, videoCodec, hasAudio, audioCodec)
+      val isHdr = pigeonVar_list[6] as Boolean
+      val hasAudio = pigeonVar_list[7] as Boolean
+      val audioCodec = pigeonVar_list[8] as String?
+      return VideoProbe(width, height, rotationDegrees, durationMs, bitrate, videoCodec, isHdr, hasAudio, audioCodec)
     }
   }
   fun toList(): List<Any?> {
@@ -466,6 +468,7 @@ data class VideoProbe (
       durationMs,
       bitrate,
       videoCodec,
+      isHdr,
       hasAudio,
       audioCodec,
     )
@@ -478,7 +481,7 @@ data class VideoProbe (
       return true
     }
     val other = other as VideoProbe
-    return MessagesPigeonUtils.deepEquals(this.width, other.width) && MessagesPigeonUtils.deepEquals(this.height, other.height) && MessagesPigeonUtils.deepEquals(this.rotationDegrees, other.rotationDegrees) && MessagesPigeonUtils.deepEquals(this.durationMs, other.durationMs) && MessagesPigeonUtils.deepEquals(this.bitrate, other.bitrate) && MessagesPigeonUtils.deepEquals(this.videoCodec, other.videoCodec) && MessagesPigeonUtils.deepEquals(this.hasAudio, other.hasAudio) && MessagesPigeonUtils.deepEquals(this.audioCodec, other.audioCodec)
+    return MessagesPigeonUtils.deepEquals(this.width, other.width) && MessagesPigeonUtils.deepEquals(this.height, other.height) && MessagesPigeonUtils.deepEquals(this.rotationDegrees, other.rotationDegrees) && MessagesPigeonUtils.deepEquals(this.durationMs, other.durationMs) && MessagesPigeonUtils.deepEquals(this.bitrate, other.bitrate) && MessagesPigeonUtils.deepEquals(this.videoCodec, other.videoCodec) && MessagesPigeonUtils.deepEquals(this.isHdr, other.isHdr) && MessagesPigeonUtils.deepEquals(this.hasAudio, other.hasAudio) && MessagesPigeonUtils.deepEquals(this.audioCodec, other.audioCodec)
   }
 
   override fun hashCode(): Int {
@@ -489,6 +492,7 @@ data class VideoProbe (
     result = 31 * result + MessagesPigeonUtils.deepHash(this.durationMs)
     result = 31 * result + MessagesPigeonUtils.deepHash(this.bitrate)
     result = 31 * result + MessagesPigeonUtils.deepHash(this.videoCodec)
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.isHdr)
     result = 31 * result + MessagesPigeonUtils.deepHash(this.hasAudio)
     result = 31 * result + MessagesPigeonUtils.deepHash(this.audioCodec)
     return result

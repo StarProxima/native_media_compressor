@@ -384,6 +384,7 @@ class VideoProbe {
     required this.durationMs,
     this.bitrate,
     this.videoCodec,
+    required this.isHdr,
     required this.hasAudio,
     this.audioCodec,
   });
@@ -400,6 +401,8 @@ class VideoProbe {
 
   String? videoCodec;
 
+  bool isHdr;
+
   bool hasAudio;
 
   String? audioCodec;
@@ -412,6 +415,7 @@ class VideoProbe {
       durationMs,
       bitrate,
       videoCodec,
+      isHdr,
       hasAudio,
       audioCodec,
     ];
@@ -429,8 +433,9 @@ class VideoProbe {
       durationMs: result[3]! as int,
       bitrate: result[4] as int?,
       videoCodec: result[5] as String?,
-      hasAudio: result[6]! as bool,
-      audioCodec: result[7] as String?,
+      isHdr: result[6]! as bool,
+      hasAudio: result[7]! as bool,
+      audioCodec: result[8] as String?,
     );
   }
 
@@ -443,7 +448,7 @@ class VideoProbe {
     if (identical(this, other)) {
       return true;
     }
-    return _deepEquals(width, other.width) && _deepEquals(height, other.height) && _deepEquals(rotationDegrees, other.rotationDegrees) && _deepEquals(durationMs, other.durationMs) && _deepEquals(bitrate, other.bitrate) && _deepEquals(videoCodec, other.videoCodec) && _deepEquals(hasAudio, other.hasAudio) && _deepEquals(audioCodec, other.audioCodec);
+    return _deepEquals(width, other.width) && _deepEquals(height, other.height) && _deepEquals(rotationDegrees, other.rotationDegrees) && _deepEquals(durationMs, other.durationMs) && _deepEquals(bitrate, other.bitrate) && _deepEquals(videoCodec, other.videoCodec) && _deepEquals(isHdr, other.isHdr) && _deepEquals(hasAudio, other.hasAudio) && _deepEquals(audioCodec, other.audioCodec);
   }
 
   @override

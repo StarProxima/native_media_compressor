@@ -790,11 +790,13 @@ VideoProbe::VideoProbe(
   int64_t height,
   int64_t rotation_degrees,
   int64_t duration_ms,
+  bool is_hdr,
   bool has_audio)
  : width_(width),
     height_(height),
     rotation_degrees_(rotation_degrees),
     duration_ms_(duration_ms),
+    is_hdr_(is_hdr),
     has_audio_(has_audio) {}
 
 VideoProbe::VideoProbe(
@@ -804,6 +806,7 @@ VideoProbe::VideoProbe(
   int64_t duration_ms,
   const int64_t* bitrate,
   const std::string* video_codec,
+  bool is_hdr,
   bool has_audio,
   const std::string* audio_codec)
  : width_(width),
@@ -812,6 +815,7 @@ VideoProbe::VideoProbe(
     duration_ms_(duration_ms),
     bitrate_(bitrate ? std::optional<int64_t>(*bitrate) : std::nullopt),
     video_codec_(video_codec ? std::optional<std::string>(*video_codec) : std::nullopt),
+    is_hdr_(is_hdr),
     has_audio_(has_audio),
     audio_codec_(audio_codec ? std::optional<std::string>(*audio_codec) : std::nullopt) {}
 
@@ -877,6 +881,15 @@ void VideoProbe::set_video_codec(std::string_view value_arg) {
 }
 
 
+bool VideoProbe::is_hdr() const {
+  return is_hdr_;
+}
+
+void VideoProbe::set_is_hdr(bool value_arg) {
+  is_hdr_ = value_arg;
+}
+
+
 bool VideoProbe::has_audio() const {
   return has_audio_;
 }
@@ -901,13 +914,14 @@ void VideoProbe::set_audio_codec(std::string_view value_arg) {
 
 EncodableList VideoProbe::ToEncodableList() const {
   EncodableList list;
-  list.reserve(8);
+  list.reserve(9);
   list.push_back(EncodableValue(width_));
   list.push_back(EncodableValue(height_));
   list.push_back(EncodableValue(rotation_degrees_));
   list.push_back(EncodableValue(duration_ms_));
   list.push_back(bitrate_ ? EncodableValue(*bitrate_) : EncodableValue());
   list.push_back(video_codec_ ? EncodableValue(*video_codec_) : EncodableValue());
+  list.push_back(EncodableValue(is_hdr_));
   list.push_back(EncodableValue(has_audio_));
   list.push_back(audio_codec_ ? EncodableValue(*audio_codec_) : EncodableValue());
   return list;
@@ -919,7 +933,8 @@ VideoProbe VideoProbe::FromEncodableList(const EncodableList& list) {
     std::get<int64_t>(list[1]),
     std::get<int64_t>(list[2]),
     std::get<int64_t>(list[3]),
-    std::get<bool>(list[6]));
+    std::get<bool>(list[6]),
+    std::get<bool>(list[7]));
   auto& encodable_bitrate = list[4];
   if (!encodable_bitrate.IsNull()) {
     decoded.set_bitrate(std::get<int64_t>(encodable_bitrate));
@@ -928,7 +943,7 @@ VideoProbe VideoProbe::FromEncodableList(const EncodableList& list) {
   if (!encodable_video_codec.IsNull()) {
     decoded.set_video_codec(std::get<std::string>(encodable_video_codec));
   }
-  auto& encodable_audio_codec = list[7];
+  auto& encodable_audio_codec = list[8];
   if (!encodable_audio_codec.IsNull()) {
     decoded.set_audio_codec(std::get<std::string>(encodable_audio_codec));
   }
@@ -936,7 +951,7 @@ VideoProbe VideoProbe::FromEncodableList(const EncodableList& list) {
 }
 
 bool VideoProbe::operator==(const VideoProbe& other) const {
-  return PigeonInternalDeepEquals(width_, other.width_) && PigeonInternalDeepEquals(height_, other.height_) && PigeonInternalDeepEquals(rotation_degrees_, other.rotation_degrees_) && PigeonInternalDeepEquals(duration_ms_, other.duration_ms_) && PigeonInternalDeepEquals(bitrate_, other.bitrate_) && PigeonInternalDeepEquals(video_codec_, other.video_codec_) && PigeonInternalDeepEquals(has_audio_, other.has_audio_) && PigeonInternalDeepEquals(audio_codec_, other.audio_codec_);
+  return PigeonInternalDeepEquals(width_, other.width_) && PigeonInternalDeepEquals(height_, other.height_) && PigeonInternalDeepEquals(rotation_degrees_, other.rotation_degrees_) && PigeonInternalDeepEquals(duration_ms_, other.duration_ms_) && PigeonInternalDeepEquals(bitrate_, other.bitrate_) && PigeonInternalDeepEquals(video_codec_, other.video_codec_) && PigeonInternalDeepEquals(is_hdr_, other.is_hdr_) && PigeonInternalDeepEquals(has_audio_, other.has_audio_) && PigeonInternalDeepEquals(audio_codec_, other.audio_codec_);
 }
 
 bool VideoProbe::operator!=(const VideoProbe& other) const {
@@ -951,6 +966,7 @@ size_t VideoProbe::Hash() const {
   result = result * 31 + PigeonInternalDeepHash(duration_ms_);
   result = result * 31 + PigeonInternalDeepHash(bitrate_);
   result = result * 31 + PigeonInternalDeepHash(video_codec_);
+  result = result * 31 + PigeonInternalDeepHash(is_hdr_);
   result = result * 31 + PigeonInternalDeepHash(has_audio_);
   result = result * 31 + PigeonInternalDeepHash(audio_codec_);
   return result;

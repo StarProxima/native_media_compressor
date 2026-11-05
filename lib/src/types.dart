@@ -8,8 +8,8 @@ enum CompressionStatus {
   compressed,
 
   /// The platform cannot handle this input or these options: a missing codec
-  /// or system library, HDR video, an audio track that cannot be copied
-  /// without re-encoding, or a format the platform cannot encode.
+  /// or system library, an audio track that cannot be copied without
+  /// re-encoding, or a format the platform cannot encode.
   unsupported,
 
   /// The output grew past `maxBytes`, so compression stopped early.
@@ -38,8 +38,9 @@ enum ImageFormat {
 /// Video compression settings.
 ///
 /// The frame is only ever scaled down, keeping its aspect ratio, until it fits
-/// both [maxShortSide] and [maxLongSide]. The output is H.264 video in an MP4
-/// container; AAC audio is copied without re-encoding.
+/// both [maxShortSide] and [maxLongSide]. The output is SDR H.264 video in an
+/// MP4 container: HDR input is tone-mapped. AAC audio is copied without
+/// re-encoding.
 final class VideoOptions {
   /// Creates video compression settings.
   const VideoOptions({
@@ -175,6 +176,7 @@ final class VideoMetadata {
     required this.rotationDegrees,
     required this.duration,
     required this.hasAudio,
+    required this.isHdr,
     this.bitrate,
     this.videoCodec,
     this.audioCodec,
@@ -197,6 +199,10 @@ final class VideoMetadata {
 
   /// Video codec MIME type, such as `video/avc` or `video/hevc`.
   final String? videoCodec;
+
+  /// Whether the video uses an HDR transfer function (PQ or HLG), as iPhone
+  /// camera recordings do by default. Compression converts it to SDR.
+  final bool isHdr;
 
   /// Whether there is at least one audio track.
   final bool hasAudio;

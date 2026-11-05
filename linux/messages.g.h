@@ -454,6 +454,7 @@ G_DECLARE_FINAL_TYPE(NmcVideoProbe, nmc_video_probe, NMC, VIDEO_PROBE, GObject)
  * duration_ms: field in this object.
  * bitrate: field in this object.
  * video_codec: field in this object.
+ * is_hdr: field in this object.
  * has_audio: field in this object.
  * audio_codec: field in this object.
  *
@@ -461,7 +462,7 @@ G_DECLARE_FINAL_TYPE(NmcVideoProbe, nmc_video_probe, NMC, VIDEO_PROBE, GObject)
  *
  * Returns: a new #NmcVideoProbe
  */
-NmcVideoProbe* nmc_video_probe_new(int64_t width, int64_t height, int64_t rotation_degrees, int64_t duration_ms, int64_t* bitrate, const gchar* video_codec, gboolean has_audio, const gchar* audio_codec);
+NmcVideoProbe* nmc_video_probe_new(int64_t width, int64_t height, int64_t rotation_degrees, int64_t duration_ms, int64_t* bitrate, const gchar* video_codec, gboolean is_hdr, gboolean has_audio, const gchar* audio_codec);
 
 /**
  * nmc_video_probe_get_width
@@ -522,6 +523,16 @@ int64_t* nmc_video_probe_get_bitrate(NmcVideoProbe* object);
  * Returns: the field value.
  */
 const gchar* nmc_video_probe_get_video_codec(NmcVideoProbe* object);
+
+/**
+ * nmc_video_probe_get_is_hdr
+ * @object: a #NmcVideoProbe.
+ *
+ * Gets the value of the isHdr field of @object.
+ *
+ * Returns: the field value.
+ */
+gboolean nmc_video_probe_get_is_hdr(NmcVideoProbe* object);
 
 /**
  * nmc_video_probe_get_has_audio

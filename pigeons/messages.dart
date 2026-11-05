@@ -94,6 +94,7 @@ class VideoProbe {
     required this.rotationDegrees,
     required this.durationMs,
     required this.hasAudio,
+    required this.isHdr,
   });
 
   int width;
@@ -102,6 +103,7 @@ class VideoProbe {
   int durationMs;
   int? bitrate;
   String? videoCodec;
+  bool isHdr;
   bool hasAudio;
   String? audioCodec;
 }

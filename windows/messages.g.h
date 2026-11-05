@@ -306,6 +306,7 @@ class VideoProbe {
     int64_t height,
     int64_t rotation_degrees,
     int64_t duration_ms,
+    bool is_hdr,
     bool has_audio);
 
   // Constructs an object setting all fields.
@@ -316,6 +317,7 @@ class VideoProbe {
     int64_t duration_ms,
     const int64_t* bitrate,
     const std::string* video_codec,
+    bool is_hdr,
     bool has_audio,
     const std::string* audio_codec);
 
@@ -338,6 +340,9 @@ class VideoProbe {
   const std::string* video_codec() const;
   void set_video_codec(const std::string_view* value_arg);
   void set_video_codec(std::string_view value_arg);
+
+  bool is_hdr() const;
+  void set_is_hdr(bool value_arg);
 
   bool has_audio() const;
   void set_has_audio(bool value_arg);
@@ -362,6 +367,7 @@ class VideoProbe {
   int64_t duration_ms_;
   std::optional<int64_t> bitrate_;
   std::optional<std::string> video_codec_;
+  bool is_hdr_;
   bool has_audio_;
   std::optional<std::string> audio_codec_;
 };
