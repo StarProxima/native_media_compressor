@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cwchar>
 #include <cwctype>
 #include <initializer_list>
@@ -128,6 +129,36 @@ bool IsWebp(const std::wstring& path) {
          std::string(header + 8, 4) == "WEBP";
 }
 
+// WIC decodes an animated PNG as a single still frame, so the frame count is
+// read from the `acTL` chunk, which must come before the first `IDAT`.
+UINT ApngFrameCount(const std::wstring& path) {
+  HANDLE file = CreateFileW(path.c_str(), GENERIC_READ,
+                            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (file == INVALID_HANDLE_VALUE) return 0;
+  std::vector<unsigned char> head(1 << 20);
+  DWORD bytes_read = 0;
+  const BOOL ok =
+      ReadFile(file, head.data(), static_cast<DWORD>(head.size()), &bytes_read, nullptr);
+  CloseHandle(file);
+  if (!ok) return 0;
+  const auto read32 = [&head](size_t at) {
+    return (static_cast<uint32_t>(head[at]) << 24) | (static_cast<uint32_t>(head[at + 1]) << 16) |
+           (static_cast<uint32_t>(head[at + 2]) << 8) | static_cast<uint32_t>(head[at + 3]);
+  };
+  size_t offset = 8;
+  while (offset + 12 <= bytes_read) {
+    const uint32_t length = read32(offset);
+    const std::string type(reinterpret_cast<const char*>(head.data() + offset + 4), 4);
+    if (type == "acTL" && length >= 8 && offset + 12 <= bytes_read) {
+      return read32(offset + 8);
+    }
+    if (type == "IDAT" || type == "IEND") return 0;
+    offset += 12 + static_cast<size_t>(length);
+  }
+  return 0;
+}
+
 // Without the Store extension WIC has no decoder at all, so the decoder cannot
 // name the format; the file signature can.
 bool NeedsCodecExtension(const std::optional<std::string>& mime_type, const std::wstring& path) {
@@ -144,6 +175,9 @@ HRESULT OpenImage(IWICImagingFactory* factory, const std::wstring& path, OpenedI
   image->mime_type = MimeType(image->decoder.Get(), path);
   NMC_RETURN_HR_IF_FAILED(image->decoder->GetFrameCount(&image->frame_count));
   if (image->frame_count == 0) return WINCODEC_ERR_FRAMEMISSING;
+  if (image->mime_type == "image/png") {
+    image->frame_count = std::max(image->frame_count, ApngFrameCount(path));
+  }
   NMC_RETURN_HR_IF_FAILED(image->decoder->GetFrame(0, &image->frame));
   NMC_RETURN_HR_IF_FAILED(image->frame->GetSize(&image->width, &image->height));
   if (image->width == 0 || image->height == 0) return WINCODEC_ERR_BADIMAGE;
