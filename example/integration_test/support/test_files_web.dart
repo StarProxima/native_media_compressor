@@ -30,4 +30,12 @@ Future<int> sizeOf(String location) async {
 /// Nothing is ever written at a destination on the web.
 bool exists(String path) => false;
 
-void writeStale(String path) {}
+void writeText(String path, String text) {}
+
+String readText(String path) => throw UnsupportedError('no files on the web');
+
+Future<String> copyFixture(String name, String path) =>
+    throw UnsupportedError('no files on the web');
+
+String createDirectory(String path) =>
+    throw UnsupportedError('no files on the web');

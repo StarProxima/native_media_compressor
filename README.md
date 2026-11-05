@@ -57,11 +57,11 @@ Compression never throws on bad input or a missing codec. Check `CompressionResu
 | `interrupted` | The system stopped the work, for example in the background. Retrying usually works. |
 | `failed` | The input is unreadable or a codec failed; `message` has details. |
 
-Every status except `compressed` leaves nothing at `destination`.
+Every status except `compressed` leaves `destination` as it was: the output is written to a temporary file and moved into place only on success, so `destination` may even equal `source`.
 
 ## What the output looks like
 
-- Video: SDR H.264 in MP4. HDR input (HLG, PQ, Dolby Vision, as iPhone cameras record by default) is tone-mapped to SDR on Android and Apple platforms. The frame is scaled down to fit `maxShortSide` and `maxLongSide`, never up. AAC audio is copied without re-encoding; on Windows audio is re-encoded to AAC. Frames above `maxFrameRate` are dropped. The displayed orientation is kept.
+- Video: SDR H.264 in MP4. HDR input (HLG, PQ, Dolby Vision, as iPhone cameras record by default) is tone-mapped to SDR on Android 7+ (when the device decodes the source profile), iOS 14+ and macOS 11+. The frame is scaled down to fit `maxShortSide` and `maxLongSide`, never up. AAC audio is copied without re-encoding; on Windows audio is re-encoded to AAC. Frames above `maxFrameRate` are dropped. The displayed orientation is kept.
 - Images: JPEG or PNG, scaled down to fit both bounds, with EXIF orientation applied to the pixels and no metadata copied. Animated images keep the first frame. JPEG output of an image with transparency is flattened onto white.
 - Videos are compressed one at a time; images and probes run in parallel.
 
@@ -70,7 +70,7 @@ Every status except `compressed` leaves nothing at `destination`.
 - **iOS and macOS:** works with both Swift Package Manager and CocoaPods. HDR conversion needs iOS 14 or macOS 11.
 - **Android:** `source` may be a `content://` URI. HEIC decoding needs Android 9 or newer.
 - **Web:** `source` is a `blob:`, `data:` or same-origin (or CORS-enabled) `http(s):` URL. `destination` is ignored: `result.path` is a new object URL of the output, which you release with `URL.revokeObjectURL` when done. Video input must be MP4 or QuickTime (fragmented MP4 is `unsupported`), and which input codecs decode depends on the browser; without WebCodecs video calls return `unsupported`. HDR is converted to SDR by the browser's colour conversion as frames are drawn. HEIC images are `unsupported` outside Safari.
-- **Windows:** HDR video is `unsupported` for now. Video needs Media Foundation, which Windows N editions only have with the Media Feature Pack; without it video calls return `unsupported` and the app still starts. HEIC and WebP decoding need the matching codec extensions from the Microsoft Store.
+- **Windows:** HDR video is `unsupported` for now. Video needs Media Foundation, which Windows N editions only have with the Media Feature Pack; without it video calls return `unsupported` and the app still starts. HEVC video, HEIC and WebP need the matching codec extensions from the Microsoft Store; without them those inputs are `unsupported`.
 
 ## License
 

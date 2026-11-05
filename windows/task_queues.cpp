@@ -120,7 +120,12 @@ void WorkerPool::Work() {
       task = std::move(pending_.front());
       pending_.pop_front();
     }
-    task();
+    // Operations catch their own exceptions and reply; this only keeps an
+    // escaped one from terminating the app through the thread.
+    try {
+      task();
+    } catch (...) {
+    }
   }
 }
 

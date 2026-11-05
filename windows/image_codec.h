@@ -26,6 +26,8 @@ struct ImageInfo {
 
 // Decodes the first frame with WIC, applies EXIF orientation, scales down and
 // writes JPEG or PNG without metadata. Blocks; call it from a worker thread.
+// The destination is replaced only when the status is compressed and is
+// otherwise left as it was; it may be the source itself.
 Outcome CompressImageFile(const ImageJob& job);
 
 // Reads the size, orientation and frame count from the headers. Null when no

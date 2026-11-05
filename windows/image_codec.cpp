@@ -115,9 +115,27 @@ std::optional<std::string> MimeType(IWICBitmapDecoder* decoder, const std::wstri
   return WideToUtf8(first);
 }
 
-bool NeedsCodecExtension(const std::optional<std::string>& mime_type) {
-  return mime_type && (*mime_type == "image/heic" || *mime_type == "image/heif" ||
-                       *mime_type == "image/avif" || *mime_type == "image/webp");
+bool IsWebp(const std::wstring& path) {
+  HANDLE file = CreateFileW(path.c_str(), GENERIC_READ,
+                            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (file == INVALID_HANDLE_VALUE) return false;
+  char header[12] = {};
+  DWORD bytes_read = 0;
+  const BOOL ok = ReadFile(file, header, static_cast<DWORD>(sizeof(header)), &bytes_read, nullptr);
+  CloseHandle(file);
+  return ok && bytes_read == sizeof(header) && std::string(header, 4) == "RIFF" &&
+         std::string(header + 8, 4) == "WEBP";
+}
+
+// Without the Store extension WIC has no decoder at all, so the decoder cannot
+// name the format; the file signature can.
+bool NeedsCodecExtension(const std::optional<std::string>& mime_type, const std::wstring& path) {
+  if (mime_type) {
+    return *mime_type == "image/heic" || *mime_type == "image/heif" ||
+           *mime_type == "image/avif" || *mime_type == "image/webp";
+  }
+  return !HeifBrand(path).empty() || IsWebp(path);
 }
 
 HRESULT OpenImage(IWICImagingFactory* factory, const std::wstring& path, OpenedImage* image) {
@@ -221,7 +239,7 @@ std::vector<BYTE> Reorient(const std::vector<BYTE>& stored, UINT width, UINT hei
   return shown;
 }
 
-Outcome Encode(IWICImagingFactory* factory, const ImageJob& job,
+Outcome Encode(IWICImagingFactory* factory, const ImageJob& job, const std::wstring& output,
                const std::vector<BYTE>& premultiplied, UINT width, UINT height) {
   bool has_alpha = false;
   if (job.png) {
@@ -260,7 +278,7 @@ Outcome Encode(IWICImagingFactory* factory, const ImageJob& job,
 
   ComPtr<IWICStream> stream;
   NMC_RETURN_IF_FAILED(factory->CreateStream(&stream), "Creating the output stream");
-  NMC_RETURN_IF_FAILED(stream->InitializeFromFilename(job.destination.c_str(), GENERIC_WRITE),
+  NMC_RETURN_IF_FAILED(stream->InitializeFromFilename(output.c_str(), GENERIC_WRITE),
                        "Creating the output file");
   ComPtr<IWICBitmapEncoder> encoder;
   if (const HRESULT result = factory->CreateEncoder(
@@ -295,14 +313,14 @@ Outcome Encode(IWICImagingFactory* factory, const ImageJob& job,
   return Outcome::Compressed(width, height);
 }
 
-Outcome Run(const ImageJob& job, bool* needs_codec_extension) {
+Outcome Run(const ImageJob& job, const std::wstring& output, bool* needs_codec_extension) {
   ComPtr<IWICImagingFactory> factory;
   NMC_RETURN_IF_FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
                                         IID_PPV_ARGS(&factory)),
                        "Creating the WIC factory");
   OpenedImage image;
   const HRESULT open_result = OpenImage(factory.Get(), job.source, &image);
-  *needs_codec_extension = NeedsCodecExtension(image.mime_type);
+  *needs_codec_extension = NeedsCodecExtension(image.mime_type, job.source);
   if (open_result == WINCODEC_ERR_COMPONENTNOTFOUND) {
     return Outcome::Of(Status::kUnsupported, "No installed WIC decoder reads this file");
   }
@@ -358,32 +376,42 @@ Outcome Run(const ImageJob& job, bool* needs_codec_extension) {
   if (image.orientation > 1) {
     pixels = Reorient(pixels, stored_width, stored_height, image.orientation);
   }
-  return Encode(factory.Get(), job, pixels, out_width, out_height);
+  return Encode(factory.Get(), job, output, pixels, out_width, out_height);
 }
 
 }  // namespace
 
 Outcome CompressImageFile(const ImageJob& job) {
-  RemoveFile(job.destination);
-  Outcome outcome;
-  {
-    ComScope com;
-    bool needs_codec_extension = false;
-    outcome = Run(job, &needs_codec_extension);
-    // A Store codec extension can be partly installed (HEIF without HEVC) and
-    // then fail midway; that is a missing codec, not a broken file.
-    if (outcome.status == Status::kFailed && needs_codec_extension) {
-      outcome.status = Status::kUnsupported;
-    }
+  if (IsDirectory(job.destination)) {
+    return Outcome::Of(Status::kFailed, "The destination is a directory");
   }
-  if (outcome.status == Status::kCompressed) {
-    outcome.size_bytes = FileSize(job.destination);
-    if (outcome.size_bytes <= 0) {
-      outcome = Outcome::Of(Status::kFailed, "The encoder wrote no output");
+  // Pixel buffers of a huge image can fail to allocate. Unwinding releases WIC
+  // and deletes the temporary file, so that ends only this operation.
+  try {
+    PendingOutput output(job.destination);
+    Outcome outcome;
+    {
+      ComScope com;
+      bool needs_codec_extension = false;
+      outcome = Run(job, output.path(), &needs_codec_extension);
+      // A Store codec extension can be partly installed (HEIF without HEVC)
+      // and then fail midway; that is a missing codec, not a broken file.
+      if (outcome.status == Status::kFailed && needs_codec_extension) {
+        outcome.status = Status::kUnsupported;
+      }
     }
+    if (outcome.status != Status::kCompressed) return outcome;
+    outcome.size_bytes = FileSize(output.path());
+    if (outcome.size_bytes <= 0) return Outcome::Of(Status::kFailed, "The encoder wrote no output");
+    if (!output.Commit()) {
+      return Outcome::Of(Status::kFailed,
+                         DescribeHresult("Replacing the destination",
+                                         HRESULT_FROM_WIN32(GetLastError())));
+    }
+    return outcome;
+  } catch (...) {
+    return Outcome::Of(Status::kFailed, kUnexpectedError);
   }
-  if (outcome.status != Status::kCompressed) RemoveFile(job.destination);
-  return outcome;
 }
 
 std::optional<ImageInfo> ProbeImageFile(const std::wstring& source) {

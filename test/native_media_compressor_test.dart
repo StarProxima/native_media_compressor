@@ -72,7 +72,11 @@ void main() {
         await NativeMediaCompressor.compressVideo(
           source: '/in.mov',
           destination: '/out.mp4',
-          options: const VideoOptions(maxBytes: 5000, includeAudio: false),
+          options: const VideoOptions(
+            maxBytes: 5000,
+            maxFrameRate: 100000,
+            includeAudio: false,
+          ),
         ).result;
 
     expect(result.status, CompressionStatus.compressed);
@@ -83,6 +87,7 @@ void main() {
     expect(request.maxShortSide, 720);
     expect(request.maxBytes, 5000);
     expect(request.includeAudio, isFalse);
+    expect(request.maxFrameRate, 240);
   });
 
   test('a status other than compressed has no path', () async {

@@ -27,4 +27,19 @@ Future<int> sizeOf(String location) async => File(location).lengthSync();
 
 bool exists(String path) => File(path).existsSync();
 
-void writeStale(String path) => File(path).writeAsStringSync('stale');
+void writeText(String path, String text) => File(path).writeAsStringSync(text);
+
+String readText(String path) => File(path).readAsStringSync();
+
+/// Copies the fixture to [path] and returns [path].
+Future<String> copyFixture(String name, String path) async {
+  await File(await fixture(name)).copy(path);
+
+  return path;
+}
+
+String createDirectory(String path) {
+  Directory(path).createSync(recursive: true);
+
+  return path;
+}
