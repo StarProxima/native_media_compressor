@@ -311,8 +311,8 @@ bool IsUnsupportedSource(HRESULT result) {
          result == MF_E_INVALIDMEDIATYPE;
 }
 
-Outcome Run(const VideoJob& job, const std::atomic<bool>& cancelled,
-            const std::function<void(double)>& on_progress) {
+Outcome Run(const VideoJob& job, const std::wstring& output,
+            const std::atomic<bool>& cancelled, const std::function<void(double)>& on_progress) {
   ComPtr<IMFAttributes> reader_attributes;
   NMC_RETURN_IF_FAILED(MFCreateAttributes(&reader_attributes, 2), "Creating reader attributes");
   // The source reader's own video processor scales the frame and converts the
@@ -449,7 +449,7 @@ Outcome Run(const VideoJob& job, const std::atomic<bool>& cancelled,
       writer_attributes->SetGUID(MF_TRANSCODE_CONTAINERTYPE, MFTranscodeContainerType_MPEG4),
       "Choosing the MP4 container");
   ComPtr<IMFSinkWriter> writer;
-  NMC_RETURN_IF_FAILED(MFCreateSinkWriterFromURL(job.destination.c_str(), nullptr,
+  NMC_RETURN_IF_FAILED(MFCreateSinkWriterFromURL(output.c_str(), nullptr,
                                                  writer_attributes.Get(), &writer),
                        "Creating the output file");
 
@@ -514,7 +514,7 @@ Outcome Run(const VideoJob& job, const std::atomic<bool>& cancelled,
   // sink statistics are checked along with the file size.
   auto written_bytes = [&]() {
     const int64_t total = stream_bytes(video_index) + (has_audio ? stream_bytes(audio_index) : 0);
-    return std::max(total, FileSize(job.destination));
+    return std::max(total, FileSize(output));
   };
 
   NMC_RETURN_IF_FAILED(writer->BeginWriting(), "Starting the encoder");
@@ -602,32 +602,32 @@ Outcome Run(const VideoJob& job, const std::atomic<bool>& cancelled,
 
 Outcome TranscodeVideo(const VideoJob& job, const std::atomic<bool>& cancelled,
                        const std::function<void(double)>& on_progress) {
-  RemoveFile(job.destination);
   if (cancelled.load()) return Outcome::Of(Status::kCancelled);
+  if (IsDirectory(job.destination)) {
+    return Outcome::Of(Status::kFailed, "The destination is a directory");
+  }
   if (!IsMediaFoundationAvailable()) {
     return Outcome::Of(Status::kUnsupported, "Media Foundation is not installed");
   }
+  PendingOutput output(job.destination);
   Outcome outcome;
   {
     MediaFoundationScope scope;
     if (!scope.started()) {
       return Outcome::Of(Status::kUnsupported, "Media Foundation failed to start");
     }
-    outcome = Run(job, cancelled, on_progress);
+    outcome = Run(job, output.path(), cancelled, on_progress);
   }
-  if (outcome.status == Status::kCompressed) {
-    outcome.size_bytes = FileSize(job.destination);
-    if (outcome.size_bytes <= 0) {
-      outcome = Outcome::Of(Status::kFailed, "The encoder wrote no output");
-    } else if (job.max_bytes && outcome.size_bytes > *job.max_bytes) {
-      outcome = Outcome::Of(Status::kTooLarge);
-    }
+  if (outcome.status != Status::kCompressed) return outcome;
+  outcome.size_bytes = FileSize(output.path());
+  if (outcome.size_bytes <= 0) return Outcome::Of(Status::kFailed, "The encoder wrote no output");
+  if (job.max_bytes && outcome.size_bytes > *job.max_bytes) return Outcome::Of(Status::kTooLarge);
+  if (!output.Commit()) {
+    return Outcome::Of(Status::kFailed,
+                       DescribeHresult("Replacing the destination",
+                                       HRESULT_FROM_WIN32(GetLastError())));
   }
-  if (outcome.status == Status::kCompressed) {
-    on_progress(1.0);
-  } else {
-    RemoveFile(job.destination);
-  }
+  on_progress(1.0);
   return outcome;
 }
 

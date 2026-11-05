@@ -239,7 +239,7 @@ std::vector<BYTE> Reorient(const std::vector<BYTE>& stored, UINT width, UINT hei
   return shown;
 }
 
-Outcome Encode(IWICImagingFactory* factory, const ImageJob& job,
+Outcome Encode(IWICImagingFactory* factory, const ImageJob& job, const std::wstring& output,
                const std::vector<BYTE>& premultiplied, UINT width, UINT height) {
   bool has_alpha = false;
   if (job.png) {
@@ -278,7 +278,7 @@ Outcome Encode(IWICImagingFactory* factory, const ImageJob& job,
 
   ComPtr<IWICStream> stream;
   NMC_RETURN_IF_FAILED(factory->CreateStream(&stream), "Creating the output stream");
-  NMC_RETURN_IF_FAILED(stream->InitializeFromFilename(job.destination.c_str(), GENERIC_WRITE),
+  NMC_RETURN_IF_FAILED(stream->InitializeFromFilename(output.c_str(), GENERIC_WRITE),
                        "Creating the output file");
   ComPtr<IWICBitmapEncoder> encoder;
   if (const HRESULT result = factory->CreateEncoder(
@@ -313,7 +313,7 @@ Outcome Encode(IWICImagingFactory* factory, const ImageJob& job,
   return Outcome::Compressed(width, height);
 }
 
-Outcome Run(const ImageJob& job, bool* needs_codec_extension) {
+Outcome Run(const ImageJob& job, const std::wstring& output, bool* needs_codec_extension) {
   ComPtr<IWICImagingFactory> factory;
   NMC_RETURN_IF_FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
                                         IID_PPV_ARGS(&factory)),
@@ -376,31 +376,35 @@ Outcome Run(const ImageJob& job, bool* needs_codec_extension) {
   if (image.orientation > 1) {
     pixels = Reorient(pixels, stored_width, stored_height, image.orientation);
   }
-  return Encode(factory.Get(), job, pixels, out_width, out_height);
+  return Encode(factory.Get(), job, output, pixels, out_width, out_height);
 }
 
 }  // namespace
 
 Outcome CompressImageFile(const ImageJob& job) {
-  RemoveFile(job.destination);
+  if (IsDirectory(job.destination)) {
+    return Outcome::Of(Status::kFailed, "The destination is a directory");
+  }
+  PendingOutput output(job.destination);
   Outcome outcome;
   {
     ComScope com;
     bool needs_codec_extension = false;
-    outcome = Run(job, &needs_codec_extension);
+    outcome = Run(job, output.path(), &needs_codec_extension);
     // A Store codec extension can be partly installed (HEIF without HEVC) and
     // then fail midway; that is a missing codec, not a broken file.
     if (outcome.status == Status::kFailed && needs_codec_extension) {
       outcome.status = Status::kUnsupported;
     }
   }
-  if (outcome.status == Status::kCompressed) {
-    outcome.size_bytes = FileSize(job.destination);
-    if (outcome.size_bytes <= 0) {
-      outcome = Outcome::Of(Status::kFailed, "The encoder wrote no output");
-    }
+  if (outcome.status != Status::kCompressed) return outcome;
+  outcome.size_bytes = FileSize(output.path());
+  if (outcome.size_bytes <= 0) return Outcome::Of(Status::kFailed, "The encoder wrote no output");
+  if (!output.Commit()) {
+    return Outcome::Of(Status::kFailed,
+                       DescribeHresult("Replacing the destination",
+                                       HRESULT_FROM_WIN32(GetLastError())));
   }
-  if (outcome.status != Status::kCompressed) RemoveFile(job.destination);
   return outcome;
 }
 
