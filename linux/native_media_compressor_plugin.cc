@@ -1,49 +1,188 @@
 #include "include/native_media_compressor/native_media_compressor_plugin.h"
 
 #include <flutter_linux/flutter_linux.h>
-#include <gtk/gtk.h>
-#include <sys/utsname.h>
 
-#include <cstring>
+#include <algorithm>
+#include <functional>
+#include <memory>
+#include <optional>
+#include <string>
+#include <utility>
 
-#include "native_media_compressor_plugin_private.h"
+#include "image_codec.h"
+#include "media_common.h"
+#include "messages.g.h"
+#include "video_queue.h"
+#include "video_transcoder.h"
 
-#define NATIVE_MEDIA_COMPRESSOR_PLUGIN(obj) \
+namespace nmc = native_media_compressor;
+
+#define NATIVE_MEDIA_COMPRESSOR_PLUGIN(obj)                                     \
   (G_TYPE_CHECK_INSTANCE_CAST((obj), native_media_compressor_plugin_get_type(), \
                               NativeMediaCompressorPlugin))
 
 struct _NativeMediaCompressorPlugin {
   GObject parent_instance;
+  NmcMediaCompressorFlutterApi* flutter_api;
+  nmc::VideoQueue* video_queue;
 };
 
 G_DEFINE_TYPE(NativeMediaCompressorPlugin, native_media_compressor_plugin, g_object_get_type())
 
-// Called when a method call is received from Flutter.
-static void native_media_compressor_plugin_handle_method_call(
-    NativeMediaCompressorPlugin* self,
-    FlMethodCall* method_call) {
-  g_autoptr(FlMethodResponse) response = nullptr;
+namespace {
 
-  const gchar* method = fl_method_call_get_name(method_call);
+template <typename T>
+std::shared_ptr<T> Retain(T* object) {
+  g_object_ref(object);
+  return std::shared_ptr<T>(object, [](T* retained) { g_object_unref(retained); });
+}
 
-  if (strcmp(method, "getPlatformVersion") == 0) {
-    response = get_platform_version();
-  } else {
-    response = FL_METHOD_RESPONSE(fl_method_not_implemented_response_new());
+// Replies and Flutter API calls must be made on the main context, which is
+// where the engine runs the platform thread.
+void PostToMain(std::function<void()> task) {
+  g_main_context_invoke_full(
+      nullptr, G_PRIORITY_DEFAULT,
+      [](gpointer data) -> gboolean {
+        (*static_cast<std::function<void()>*>(data))();
+        return G_SOURCE_REMOVE;
+      },
+      new std::function<void()>(std::move(task)),
+      [](gpointer data) { delete static_cast<std::function<void()>*>(data); });
+}
+
+void RunInBackground(std::function<void()> task) {
+  static GThreadPool* pool = g_thread_pool_new(
+      [](gpointer data, gpointer) {
+        std::unique_ptr<std::function<void()>> owned(static_cast<std::function<void()>*>(data));
+        (*owned)();
+      },
+      nullptr, static_cast<gint>(std::max(2u, g_get_num_processors())), FALSE, nullptr);
+  g_thread_pool_push(pool, new std::function<void()>(std::move(task)), nullptr);
+}
+
+std::optional<int64_t> Optional(const int64_t* value) {
+  return value != nullptr ? std::optional<int64_t>(*value) : std::nullopt;
+}
+
+NmcCompressionReply* ToReply(const nmc::Outcome& outcome) {
+  const char* message = outcome.message.empty() ? nullptr : outcome.message.c_str();
+  if (outcome.status != NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_COMPRESSED) {
+    return nmc_compression_reply_new(outcome.status, nullptr, nullptr, nullptr, message);
   }
-
-  fl_method_call_respond(method_call, response, nullptr);
+  int64_t width = outcome.width;
+  int64_t height = outcome.height;
+  int64_t size_bytes = outcome.size_bytes;
+  return nmc_compression_reply_new(outcome.status, &width, &height, &size_bytes, message);
 }
 
-FlMethodResponse* get_platform_version() {
-  struct utsname uname_data = {};
-  uname(&uname_data);
-  g_autofree gchar *version = g_strdup_printf("Linux %s", uname_data.version);
-  g_autoptr(FlValue) result = fl_value_new_string(version);
-  return FL_METHOD_RESPONSE(fl_method_success_response_new(result));
+void OnProgressSent(GObject* source, GAsyncResult* result, gpointer) {
+  g_autoptr(GError) error = nullptr;
+  g_autoptr(NmcMediaCompressorFlutterApiOnProgressResponse) response =
+      nmc_media_compressor_flutter_api_on_progress_finish(
+          NMC_MEDIA_COMPRESSOR_FLUTTER_API(source), result, &error);
 }
+
+void HandleCompressVideo(int64_t task_id, NmcVideoRequest* request,
+                         NmcMediaCompressorHostApiResponseHandle* response_handle,
+                         gpointer user_data) {
+  NativeMediaCompressorPlugin* self = NATIVE_MEDIA_COMPRESSOR_PLUGIN(user_data);
+  auto task = std::make_shared<nmc::VideoQueue::Task>();
+  task->id = task_id;
+  task->job.source = nmc_video_request_get_source(request);
+  task->job.destination = nmc_video_request_get_destination(request);
+  task->job.bounds.max_short_side = Optional(nmc_video_request_get_max_short_side(request));
+  task->job.bounds.max_long_side = Optional(nmc_video_request_get_max_long_side(request));
+  task->job.video_bitrate = nmc_video_request_get_video_bitrate(request);
+  task->job.max_frame_rate = Optional(nmc_video_request_get_max_frame_rate(request));
+  task->job.max_bytes = Optional(nmc_video_request_get_max_bytes(request));
+  task->job.include_audio = nmc_video_request_get_include_audio(request);
+
+  auto api = Retain(self->flutter_api);
+  task->on_progress = [api, task_id](double progress) {
+    PostToMain([api, task_id, progress] {
+      nmc_media_compressor_flutter_api_on_progress(api.get(), task_id, progress, nullptr,
+                                                   OnProgressSent, nullptr);
+    });
+  };
+  auto response = Retain(response_handle);
+  task->on_done = [response](const nmc::Outcome& outcome) {
+    PostToMain([response, outcome] {
+      g_autoptr(NmcCompressionReply) reply = ToReply(outcome);
+      nmc_media_compressor_host_api_respond_compress_video(response.get(), reply);
+    });
+  };
+  self->video_queue->Enqueue(std::move(task));
+}
+
+void HandleCompressImage(NmcImageRequest* request,
+                         NmcMediaCompressorHostApiResponseHandle* response_handle, gpointer) {
+  nmc::ImageJob job;
+  job.source = nmc_image_request_get_source(request);
+  job.destination = nmc_image_request_get_destination(request);
+  job.bounds.max_short_side = Optional(nmc_image_request_get_max_short_side(request));
+  job.bounds.max_long_side = Optional(nmc_image_request_get_max_long_side(request));
+  job.format = nmc_image_request_get_format(request);
+  job.quality = nmc_image_request_get_quality(request);
+  auto response = Retain(response_handle);
+  RunInBackground([job, response] {
+    const nmc::Outcome outcome = nmc::CompressImageFile(job);
+    PostToMain([response, outcome] {
+      g_autoptr(NmcCompressionReply) reply = ToReply(outcome);
+      nmc_media_compressor_host_api_respond_compress_image(response.get(), reply);
+    });
+  });
+}
+
+NmcMediaCompressorHostApiCancelResponse* HandleCancel(int64_t task_id, gpointer user_data) {
+  NATIVE_MEDIA_COMPRESSOR_PLUGIN(user_data)->video_queue->Cancel(task_id);
+  return nmc_media_compressor_host_api_cancel_response_new();
+}
+
+void HandleProbeImage(const gchar* source,
+                      NmcMediaCompressorHostApiResponseHandle* response_handle, gpointer) {
+  auto response = Retain(response_handle);
+  RunInBackground([path = std::string(source), response] {
+    const std::optional<nmc::ImageInfo> info = nmc::ProbeImageFile(path);
+    PostToMain([response, info] {
+      g_autoptr(NmcImageProbe) probe =
+          info ? nmc_image_probe_new(info->width, info->height, info->frame_count,
+                                     info->mime_type.c_str())
+               : nullptr;
+      nmc_media_compressor_host_api_respond_probe_image(response.get(), probe);
+    });
+  });
+}
+
+void HandleProbeVideo(const gchar* source,
+                      NmcMediaCompressorHostApiResponseHandle* response_handle, gpointer) {
+  auto response = Retain(response_handle);
+  RunInBackground([path = std::string(source), response] {
+    const std::optional<nmc::VideoInfo> info = nmc::ProbeVideoFile(path);
+    PostToMain([response, info] {
+      g_autoptr(NmcVideoProbe) probe = nullptr;
+      if (info) {
+        int64_t bitrate = info->bitrate.value_or(0);
+        probe = nmc_video_probe_new(info->width, info->height, info->rotation_degrees,
+                                    info->duration_ms, info->bitrate ? &bitrate : nullptr,
+                                    info->video_codec.c_str(), info->is_hdr, info->has_audio,
+                                    info->has_audio ? info->audio_codec.c_str() : nullptr);
+      }
+      nmc_media_compressor_host_api_respond_probe_video(response.get(), probe);
+    });
+  });
+}
+
+const NmcMediaCompressorHostApiVTable kHostApi = {
+    HandleCompressVideo, HandleCompressImage, HandleCancel, HandleProbeImage, HandleProbeVideo,
+};
+
+}  // namespace
 
 static void native_media_compressor_plugin_dispose(GObject* object) {
+  NativeMediaCompressorPlugin* self = NATIVE_MEDIA_COMPRESSOR_PLUGIN(object);
+  delete self->video_queue;
+  self->video_queue = nullptr;
+  g_clear_object(&self->flutter_api);
   G_OBJECT_CLASS(native_media_compressor_plugin_parent_class)->dispose(object);
 }
 
@@ -51,26 +190,19 @@ static void native_media_compressor_plugin_class_init(NativeMediaCompressorPlugi
   G_OBJECT_CLASS(klass)->dispose = native_media_compressor_plugin_dispose;
 }
 
-static void native_media_compressor_plugin_init(NativeMediaCompressorPlugin* self) {}
-
-static void method_call_cb(FlMethodChannel* channel, FlMethodCall* method_call,
-                           gpointer user_data) {
-  NativeMediaCompressorPlugin* plugin = NATIVE_MEDIA_COMPRESSOR_PLUGIN(user_data);
-  native_media_compressor_plugin_handle_method_call(plugin, method_call);
+static void native_media_compressor_plugin_init(NativeMediaCompressorPlugin* self) {
+  self->flutter_api = nullptr;
+  self->video_queue = new nmc::VideoQueue([](nmc::VideoQueue::Task& task) {
+    return nmc::TranscodeVideo(task.job, task.cancelled, task.on_progress);
+  });
 }
 
 void native_media_compressor_plugin_register_with_registrar(FlPluginRegistrar* registrar) {
   NativeMediaCompressorPlugin* plugin = NATIVE_MEDIA_COMPRESSOR_PLUGIN(
       g_object_new(native_media_compressor_plugin_get_type(), nullptr));
-
-  g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
-  g_autoptr(FlMethodChannel) channel =
-      fl_method_channel_new(fl_plugin_registrar_get_messenger(registrar),
-                            "native_media_compressor",
-                            FL_METHOD_CODEC(codec));
-  fl_method_channel_set_method_call_handler(channel, method_call_cb,
-                                            g_object_ref(plugin),
-                                            g_object_unref);
-
+  FlBinaryMessenger* messenger = fl_plugin_registrar_get_messenger(registrar);
+  plugin->flutter_api = nmc_media_compressor_flutter_api_new(messenger, nullptr);
+  nmc_media_compressor_host_api_set_method_handlers(messenger, nullptr, &kHostApi,
+                                                    g_object_ref(plugin), g_object_unref);
   g_object_unref(plugin);
 }
