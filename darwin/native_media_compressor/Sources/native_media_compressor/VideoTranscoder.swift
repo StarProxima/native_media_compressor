@@ -17,7 +17,7 @@ final class VideoTranscoder {
   private var stopReply: CompressionReply?
   private var pumps: [TrackPump] = []
   private var writtenSamples = 0
-  private var lastFrameSlot = Int64.min
+  private var lastFrameSlot = -Double.infinity
   private var reportedPercent = -1
 
   init(
@@ -157,7 +157,9 @@ final class VideoTranscoder {
         // of a screen recording whose frames come slightly faster than the
         // limit, halving its rate.
         let time = CMSampleBufferGetPresentationTimeStamp(sample).seconds
-        let slot = Int64((time * maxRate).rounded())
+        let slot = (time * maxRate).rounded()
+        // Kept in Double: an Int conversion of a huge or invalid time would trap.
+        guard slot.isFinite else { return true }
         guard slot > lastFrameSlot else { return false }
         lastFrameSlot = slot
         return true
@@ -247,7 +249,7 @@ final class VideoTranscoder {
 
   private func reportProgress(at time: Double, duration: Double) {
     guard duration > 0, time.isFinite else { return }
-    let percent = max(0, min(100, Int(time / duration * 100)))
+    let percent = Int(max(0, min(100, time / duration * 100)))
     guard percent > reportedPercent else { return }
     reportedPercent = percent
     onProgress(Double(percent) / 100)
