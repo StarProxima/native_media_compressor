@@ -41,8 +41,9 @@ enum ImageFormat {
 /// The frame is only ever scaled down, keeping its aspect ratio, until it fits
 /// both [maxShortSide] and [maxLongSide]. The output is SDR H.264 video in an
 /// MP4 container. HDR input (HLG, PQ, Dolby Vision) is tone-mapped to SDR on
-/// Android 7+ with a decoder for the source profile, iOS 14+ and macOS 11+;
-/// elsewhere it is [CompressionStatus.unsupported]. AAC audio is copied without
+/// Android 7+ with a decoder for the source profile, iOS 14+ and macOS 11+,
+/// and by the browser on the web where it decodes the source; elsewhere it is
+/// [CompressionStatus.unsupported]. AAC audio is copied without
 /// re-encoding.
 final class VideoOptions {
   /// Creates video compression settings.
