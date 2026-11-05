@@ -515,4 +515,89 @@ void main() {
       _expectAbsent(destination);
     });
   });
+
+  group('destination', () {
+    Future<String> copyOf(String name) async {
+      final copy = File(_out('own-$name'));
+      await File(await _fixture(name)).copy(copy.path);
+
+      return copy.path;
+    }
+
+    testWidgets('compresses an image in place', (_) async {
+      final path = await copyOf('photo_exif_rotated.jpg');
+      final before = File(path).lengthSync();
+
+      final result = await NativeMediaCompressor.compressImage(
+        source: path,
+        destination: path,
+        options: const ImageOptions(maxLongSide: 800),
+      );
+
+      expect(result.status, CompressionStatus.compressed, reason: '$result');
+      expect(File(path).lengthSync(), lessThan(before));
+      final probe = await NativeMediaCompressor.probeImage(path);
+      expect((probe!.width, probe.height), (600, 800));
+    });
+
+    testWidgets('compresses a video in place', (_) async {
+      final path = await copyOf('h264_rotated_90.mp4');
+      final before = File(path).lengthSync();
+
+      final result =
+          await NativeMediaCompressor.compressVideo(
+            source: path,
+            destination: path,
+            options: const VideoOptions(maxShortSide: 240),
+          ).result;
+
+      expect(result.status, CompressionStatus.compressed, reason: '$result');
+      expect(File(path).lengthSync(), lessThan(before));
+      final probe = await NativeMediaCompressor.probeVideo(path);
+      expect(probe!.width, lessThan(probe.height));
+    });
+
+    testWidgets('a failure leaves an existing destination as it was', (
+      _,
+    ) async {
+      final image = File(_out('kept.jpg'))..writeAsStringSync('keep');
+      final video = File(_out('kept.mp4'))..writeAsStringSync('keep');
+
+      final imageResult = await NativeMediaCompressor.compressImage(
+        source: await _fixture('broken.jpg'),
+        destination: image.path,
+      );
+      final videoResult =
+          await NativeMediaCompressor.compressVideo(
+            source: await _fixture('h264_aac_1080p.mp4'),
+            destination: video.path,
+            options: const VideoOptions(
+              maxShortSide: 1080,
+              videoBitrate: 8000000,
+              maxBytes: 20000,
+            ),
+          ).result;
+
+      expect(imageResult.isCompressed, isFalse);
+      expect(videoResult.status, CompressionStatus.tooLarge);
+      expect(image.readAsStringSync(), 'keep');
+      expect(video.readAsStringSync(), 'keep');
+    });
+
+    testWidgets('a directory destination is not touched', (_) async {
+      final directory = Directory(_out('folder'))..createSync();
+      final inside = File('${directory.path}/inside.txt')
+        ..writeAsStringSync('keep');
+      final source = await _fixture('photo_exif_rotated.jpg');
+
+      final result = await NativeMediaCompressor.compressImage(
+        source: source,
+        destination: directory.path,
+      );
+
+      expect(result.isCompressed, isFalse);
+      expect(inside.readAsStringSync(), 'keep');
+      expect(File(source).existsSync(), isTrue);
+    });
+  });
 }
