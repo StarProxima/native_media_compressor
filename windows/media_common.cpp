@@ -128,7 +128,6 @@ PendingOutput::PendingOutput(const std::wstring& destination) : destination_(des
     }
     if (GetLastError() != ERROR_FILE_EXISTS) break;
   }
-  path_ = TemporarySibling(destination, 0);
 }
 
 PendingOutput::~PendingOutput() {

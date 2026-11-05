@@ -690,6 +690,9 @@ Outcome TranscodeVideo(const VideoJob& job, const std::atomic<bool>& cancelled,
   // exception ends only this operation instead of the app.
   try {
     PendingOutput output(job.destination);
+    if (!output.reserved()) {
+      return Outcome::Of(Status::kFailed, "Cannot create a file next to the destination");
+    }
     Outcome outcome;
     {
       MediaFoundationScope scope;

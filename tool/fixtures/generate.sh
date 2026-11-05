@@ -84,6 +84,7 @@ scene((1600, 1200)).save("heic_source.png")
 frames = [scene((320, 240)).rotate(angle) for angle in (0, 10, 20)]
 frames[0].save("animated.webp", save_all=True, append_images=frames[1:], duration=100, loop=0)
 frames[0].save("animated.gif", save_all=True, append_images=frames[1:], duration=100, loop=0)
+frames[0].save("animated.png", save_all=True, append_images=frames[1:], duration=100, loop=0)
 EOF
 
 sips -s format heic -s formatOptions 80 heic_source.png --out photo.heic >/dev/null
