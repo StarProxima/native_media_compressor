@@ -81,8 +81,14 @@ internal class VideoTranscoder(
             val trackFormat = videoExtractor.getTrackFormat(videoTrack)
             val (sourceFormat, decoderName) = findDecoder(trackFormat)
             val transfer = shaderTransfer ?: VideoProber.hdrTransfer(source, trackFormat).let {
-                // Dolby Vision is PQ-based when the track does not say otherwise.
-                if (!it.isHdr && trackFormat.mime == MediaFormat.MIMETYPE_VIDEO_DOLBY_VISION) HdrTransfer.PQ else it
+                // Dolby Vision is PQ-based when the track does not name a transfer;
+                // an explicit SDR transfer (profile 8.2) stays SDR.
+                val unnamed = !trackFormat.containsKey(MediaFormat.KEY_COLOR_TRANSFER)
+                if (!it.isHdr && unnamed && trackFormat.mime == MediaFormat.MIMETYPE_VIDEO_DOLBY_VISION) {
+                    HdrTransfer.PQ
+                } else {
+                    it
+                }
             }
             if (transfer.isHdr && Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
                 throw Stop(CompressionStatus.UNSUPPORTED, "HDR video needs API 24")
