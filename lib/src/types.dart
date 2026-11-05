@@ -212,8 +212,8 @@ final class CompressionTask {
     required this.result,
     required Stream<double> progress,
     required Future<void> Function() onCancel,
-  })  : progress = progress.asBroadcastStream(),
-        _onCancel = onCancel;
+  }) : progress = progress.asBroadcastStream(),
+       _onCancel = onCancel;
 
   /// Completes when compression ends. Never completes with an error.
   final Future<CompressionResult> result;

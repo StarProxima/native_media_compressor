@@ -53,8 +53,8 @@ class PigeonMediaCompressor extends NativeMediaCompressorPlatform
   /// Creates an implementation that talks to the host through
   /// [binaryMessenger], or through the default messenger when it is null.
   PigeonMediaCompressor({BinaryMessenger? binaryMessenger})
-      : _binaryMessenger = binaryMessenger,
-        _host = pigeon.MediaCompressorHostApi(binaryMessenger: binaryMessenger);
+    : _binaryMessenger = binaryMessenger,
+      _host = pigeon.MediaCompressorHostApi(binaryMessenger: binaryMessenger);
 
   final BinaryMessenger? _binaryMessenger;
   final pigeon.MediaCompressorHostApi _host;
@@ -201,9 +201,10 @@ class PigeonMediaCompressor extends NativeMediaCompressorPlatform
       return CompressionResult(
         // Pigeon reports a channel nobody listens to on this platform as
         // channel-error.
-        status: error.code == 'channel-error'
-            ? CompressionStatus.unsupported
-            : CompressionStatus.failed,
+        status:
+            error.code == 'channel-error'
+                ? CompressionStatus.unsupported
+                : CompressionStatus.failed,
         message: '${error.code}: ${error.message}',
       );
     } on MissingPluginException {

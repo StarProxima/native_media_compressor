@@ -29,12 +29,11 @@ abstract final class NativeMediaCompressor {
     required String source,
     required String destination,
     VideoOptions options = const VideoOptions(),
-  }) =>
-      NativeMediaCompressorPlatform.instance.compressVideo(
-        source: source,
-        destination: destination,
-        options: options,
-      );
+  }) => NativeMediaCompressorPlatform.instance.compressVideo(
+    source: source,
+    destination: destination,
+    options: options,
+  );
 
   /// Compresses the image at [source] into [destination].
   ///
@@ -43,12 +42,11 @@ abstract final class NativeMediaCompressor {
     required String source,
     required String destination,
     ImageOptions options = const ImageOptions(),
-  }) =>
-      NativeMediaCompressorPlatform.instance.compressImage(
-        source: source,
-        destination: destination,
-        options: options,
-      );
+  }) => NativeMediaCompressorPlatform.instance.compressImage(
+    source: source,
+    destination: destination,
+    options: options,
+  );
 
   /// Reads the image size and frame count without decoding the pixels.
   ///

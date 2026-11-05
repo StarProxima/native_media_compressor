@@ -14,22 +14,20 @@ class NativeMediaCompressorWeb extends NativeMediaCompressorPlatform {
     required String source,
     required String destination,
     required VideoOptions options,
-  }) =>
-      CompressionTask(
-        result: Future.value(
-          const CompressionResult(status: CompressionStatus.unsupported),
-        ),
-        progress: const Stream.empty(),
-        onCancel: () async {},
-      );
+  }) => CompressionTask(
+    result: Future.value(
+      const CompressionResult(status: CompressionStatus.unsupported),
+    ),
+    progress: const Stream.empty(),
+    onCancel: () async {},
+  );
 
   @override
   Future<CompressionResult> compressImage({
     required String source,
     required String destination,
     required ImageOptions options,
-  }) async =>
-      const CompressionResult(status: CompressionStatus.unsupported);
+  }) async => const CompressionResult(status: CompressionStatus.unsupported);
 
   @override
   Future<ImageMetadata?> probeImage(String source) async => null;

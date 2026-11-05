@@ -80,7 +80,9 @@ void main() {
         isNull,
       );
       expect(
-        await NativeMediaCompressor.probeVideo(await _fixture('audio_only.m4a')),
+        await NativeMediaCompressor.probeVideo(
+          await _fixture('audio_only.m4a'),
+        ),
         isNull,
       );
     });
@@ -119,11 +121,12 @@ void main() {
 
     testWidgets('keeps the displayed orientation', (_) async {
       final destination = _out('rotated.mp4');
-      final result = await NativeMediaCompressor.compressVideo(
-        source: await _fixture('h264_rotated_90.mp4'),
-        destination: destination,
-        options: const VideoOptions(maxShortSide: 360),
-      ).result;
+      final result =
+          await NativeMediaCompressor.compressVideo(
+            source: await _fixture('h264_rotated_90.mp4'),
+            destination: destination,
+            options: const VideoOptions(maxShortSide: 360),
+          ).result;
 
       expect(result.status, CompressionStatus.compressed, reason: '$result');
       expect(result.width!, lessThan(result.height!));
@@ -133,11 +136,12 @@ void main() {
 
     testWidgets('re-encodes HEVC to H.264', (_) async {
       final destination = _out('hevc.mp4');
-      final result = await NativeMediaCompressor.compressVideo(
-        source: await _fixture('hevc_aac_720p.mov'),
-        destination: destination,
-        options: const VideoOptions(maxShortSide: 360),
-      ).result;
+      final result =
+          await NativeMediaCompressor.compressVideo(
+            source: await _fixture('hevc_aac_720p.mov'),
+            destination: destination,
+            options: const VideoOptions(maxShortSide: 360),
+          ).result;
 
       expect(result.status, CompressionStatus.compressed, reason: '$result');
       final probe = await NativeMediaCompressor.probeVideo(destination);
@@ -146,11 +150,12 @@ void main() {
 
     testWidgets('copies or rejects several audio tracks', (_) async {
       final destination = _out('two-audio.mp4');
-      final result = await NativeMediaCompressor.compressVideo(
-        source: await _fixture('two_audio_tracks.mp4'),
-        destination: destination,
-        options: const VideoOptions(maxShortSide: 360),
-      ).result;
+      final result =
+          await NativeMediaCompressor.compressVideo(
+            source: await _fixture('two_audio_tracks.mp4'),
+            destination: destination,
+            options: const VideoOptions(maxShortSide: 360),
+          ).result;
 
       if (_fullCodecs) {
         expect(result.status, CompressionStatus.compressed, reason: '$result');
@@ -169,16 +174,18 @@ void main() {
       final kept = _out('mp3-kept.mp4');
       final dropped = _out('mp3-dropped.mp4');
 
-      final withAudio = await NativeMediaCompressor.compressVideo(
-        source: source,
-        destination: kept,
-        options: const VideoOptions(maxShortSide: 360),
-      ).result;
-      final withoutAudio = await NativeMediaCompressor.compressVideo(
-        source: source,
-        destination: dropped,
-        options: const VideoOptions(maxShortSide: 360, includeAudio: false),
-      ).result;
+      final withAudio =
+          await NativeMediaCompressor.compressVideo(
+            source: source,
+            destination: kept,
+            options: const VideoOptions(maxShortSide: 360),
+          ).result;
+      final withoutAudio =
+          await NativeMediaCompressor.compressVideo(
+            source: source,
+            destination: dropped,
+            options: const VideoOptions(maxShortSide: 360, includeAudio: false),
+          ).result;
 
       if (_fullCodecs) {
         expect(withAudio.status, CompressionStatus.unsupported);
@@ -191,11 +198,12 @@ void main() {
 
     testWidgets('HDR is either converted or unsupported', (_) async {
       final destination = _out('hdr.mp4');
-      final result = await NativeMediaCompressor.compressVideo(
-        source: await _fixture('hdr10_hevc.mp4'),
-        destination: destination,
-        options: const VideoOptions(maxShortSide: 360),
-      ).result;
+      final result =
+          await NativeMediaCompressor.compressVideo(
+            source: await _fixture('hdr10_hevc.mp4'),
+            destination: destination,
+            options: const VideoOptions(maxShortSide: 360),
+          ).result;
 
       expect(
         result.status,
@@ -206,15 +214,16 @@ void main() {
 
     testWidgets('stops when the output outgrows maxBytes', (_) async {
       final destination = _out('too-large.mp4');
-      final result = await NativeMediaCompressor.compressVideo(
-        source: await _fixture('h264_aac_1080p.mp4'),
-        destination: destination,
-        options: const VideoOptions(
-          maxShortSide: 1080,
-          videoBitrate: 8000000,
-          maxBytes: 20000,
-        ),
-      ).result;
+      final result =
+          await NativeMediaCompressor.compressVideo(
+            source: await _fixture('h264_aac_1080p.mp4'),
+            destination: destination,
+            options: const VideoOptions(
+              maxShortSide: 1080,
+              videoBitrate: 8000000,
+              maxBytes: 20000,
+            ),
+          ).result;
 
       expect(result.status, CompressionStatus.tooLarge);
       _expectAbsent(destination);
@@ -236,10 +245,11 @@ void main() {
     testWidgets('a file without video is unsupported or failed', (_) async {
       for (final name in ['audio_only.m4a', 'broken.jpg']) {
         final destination = _out('$name.mp4');
-        final result = await NativeMediaCompressor.compressVideo(
-          source: await _fixture(name),
-          destination: destination,
-        ).result;
+        final result =
+            await NativeMediaCompressor.compressVideo(
+              source: await _fixture(name),
+              destination: destination,
+            ).result;
 
         expect(
           result.status,
@@ -273,11 +283,12 @@ void main() {
       final destination = _out('existing.mp4');
       File(destination).writeAsStringSync('stale');
 
-      final result = await NativeMediaCompressor.compressVideo(
-        source: await _fixture('hevc_aac_720p.mov'),
-        destination: destination,
-        options: const VideoOptions(maxShortSide: 240),
-      ).result;
+      final result =
+          await NativeMediaCompressor.compressVideo(
+            source: await _fixture('hevc_aac_720p.mov'),
+            destination: destination,
+            options: const VideoOptions(maxShortSide: 240),
+          ).result;
 
       expect(result.status, CompressionStatus.compressed);
       expect(File(destination).lengthSync(), greaterThan(1000));
@@ -360,10 +371,7 @@ void main() {
       final result = await NativeMediaCompressor.compressImage(
         source: await _fixture('alpha.png'),
         destination: _out('not-upscaled.png'),
-        options: const ImageOptions(
-          maxLongSide: 4000,
-          format: ImageFormat.png,
-        ),
+        options: const ImageOptions(maxLongSide: 4000, format: ImageFormat.png),
       );
 
       expect(result.status, CompressionStatus.compressed, reason: '$result');

@@ -58,7 +58,8 @@ void main() {
   });
 
   test('compressVideo passes options and reports the destination', () async {
-    host.handlers['compressVideo'] = (_) async => _ok(
+    host.handlers['compressVideo'] =
+        (_) async => _ok(
           pigeon.CompressionReply(
             status: pigeon.CompressionStatus.compressed,
             width: 720,
@@ -67,11 +68,12 @@ void main() {
           ),
         );
 
-    final result = await NativeMediaCompressor.compressVideo(
-      source: '/in.mov',
-      destination: '/out.mp4',
-      options: const VideoOptions(maxBytes: 5000, includeAudio: false),
-    ).result;
+    final result =
+        await NativeMediaCompressor.compressVideo(
+          source: '/in.mov',
+          destination: '/out.mp4',
+          options: const VideoOptions(maxBytes: 5000, includeAudio: false),
+        ).result;
 
     expect(result.status, CompressionStatus.compressed);
     expect(result.path, '/out.mp4');
@@ -84,7 +86,8 @@ void main() {
   });
 
   test('a status other than compressed has no path', () async {
-    host.handlers['compressImage'] = (_) async => _ok(
+    host.handlers['compressImage'] =
+        (_) async => _ok(
           pigeon.CompressionReply(status: pigeon.CompressionStatus.tooLarge),
         );
 
@@ -164,20 +167,22 @@ void main() {
   test('a missing host implementation is unsupported', () async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMessageHandler(
-      '$_prefix.MediaCompressorHostApi.compressVideo',
-      null,
-    );
+          '$_prefix.MediaCompressorHostApi.compressVideo',
+          null,
+        );
 
-    final result = await NativeMediaCompressor.compressVideo(
-      source: '/a.mp4',
-      destination: '/a-out.mp4',
-    ).result;
+    final result =
+        await NativeMediaCompressor.compressVideo(
+          source: '/a.mp4',
+          destination: '/a-out.mp4',
+        ).result;
 
     expect(result.status, CompressionStatus.unsupported);
   });
 
   test('probes map host replies and errors', () async {
-    host.handlers['probeImage'] = (_) async => _ok(
+    host.handlers['probeImage'] =
+        (_) async => _ok(
           pigeon.ImageProbe(
             width: 3000,
             height: 4000,
