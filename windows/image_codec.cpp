@@ -389,6 +389,9 @@ Outcome CompressImageFile(const ImageJob& job) {
   // and deletes the temporary file, so that ends only this operation.
   try {
     PendingOutput output(job.destination);
+    if (!output.reserved()) {
+      return Outcome::Of(Status::kFailed, "Cannot create a file next to the destination");
+    }
     Outcome outcome;
     {
       ComScope com;
