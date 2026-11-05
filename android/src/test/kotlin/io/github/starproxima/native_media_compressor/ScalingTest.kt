@@ -15,7 +15,22 @@ internal class ScalingTest {
     }
 
     @Test
-    fun videoSidesAreMultiplesOf16WithinTheBound() {
-        assertEquals(Size(640, 352), Scaling.videoSize(Size(1920, 1080), maxShortSide = 360, maxLongSide = null))
+    fun videoKeepsTheAspectWithEvenSides() {
+        assertEquals(Size(640, 360), video(Size(1920, 1080), maxShortSide = 360, alignment = 2))
+        assertEquals(Size(1920, 1080), video(Size(1920, 1080), maxShortSide = 1080, alignment = 2))
+        assertEquals(Size(720, 1564), video(Size(1206, 2622), maxShortSide = 720, alignment = 2))
     }
+
+    @Test
+    fun videoFallsBackToMultiplesOf16() {
+        assertEquals(Size(640, 352), video(Size(1920, 1080), maxShortSide = 360, alignment = 16))
+    }
+
+    @Test
+    fun videoStaysWithinASmallBound() {
+        assertEquals(Size(14, 8), video(Size(1920, 1080), maxShortSide = 8, alignment = 2))
+    }
+
+    private fun video(size: Size, maxShortSide: Long, alignment: Int) =
+        Scaling.videoSize(size, maxShortSide, maxLongSide = null, widthAlignment = alignment, heightAlignment = alignment)
 }

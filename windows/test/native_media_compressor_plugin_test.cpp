@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstdint>
 #include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -25,18 +26,32 @@ class TempDirectory {
     CreateDirectoryW(path_.c_str(), nullptr);
   }
   ~TempDirectory() {
-    for (const auto& file : files_) DeleteFileW(file.c_str());
+    for (const auto& name : Entries()) {
+      const std::wstring entry = path_ + L"\\" + name;
+      if (!DeleteFileW(entry.c_str())) RemoveDirectoryW(entry.c_str());
+    }
     RemoveDirectoryW(path_.c_str());
   }
 
-  std::wstring File(const std::wstring& name) {
-    files_.push_back(path_ + L"\\" + name);
-    return files_.back();
+  std::wstring File(const std::wstring& name) const { return path_ + L"\\" + name; }
+
+  // Names in the directory, to catch temporary files left behind.
+  std::vector<std::wstring> Entries() const {
+    std::vector<std::wstring> names;
+    WIN32_FIND_DATAW data;
+    const std::wstring pattern = path_ + L"\\*";
+    HANDLE search = FindFirstFileW(pattern.c_str(), &data);
+    if (search == INVALID_HANDLE_VALUE) return names;
+    do {
+      const std::wstring name = data.cFileName;
+      if (name != L"." && name != L"..") names.push_back(name);
+    } while (FindNextFileW(search, &data));
+    FindClose(search);
+    return names;
   }
 
  private:
   std::wstring path_;
-  std::vector<std::wstring> files_;
 };
 
 // Writes a 24-bit bottom-up BMP filled with one colour.
@@ -71,6 +86,11 @@ void WriteBmp(const std::wstring& path, int width, int height) {
 void WriteText(const std::wstring& path, const char* text) {
   std::ofstream out(path, std::ios::binary);
   out << text;
+}
+
+std::string ReadText(const std::wstring& path) {
+  std::ifstream in(path, std::ios::binary);
+  return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
 }
 
 }  // namespace
@@ -145,7 +165,7 @@ TEST(CompressImageFile, WritesPngWithoutScalingUp) {
   EXPECT_EQ(ProbeImageFile(destination)->mime_type.value_or(""), "image/png");
 }
 
-TEST(CompressImageFile, BrokenInputLeavesNoOutput) {
+TEST(CompressImageFile, BrokenInputKeepsTheDestination) {
   TempDirectory directory;
   const auto source = directory.File(L"broken.jpg");
   const auto destination = directory.File(L"out.jpg");
@@ -158,8 +178,47 @@ TEST(CompressImageFile, BrokenInputLeavesNoOutput) {
   const Outcome outcome = CompressImageFile(job);
 
   EXPECT_TRUE(outcome.status == Status::kFailed || outcome.status == Status::kUnsupported);
-  EXPECT_EQ(FileSize(destination), -1);
+  EXPECT_EQ(ReadText(destination), "stale");
+  EXPECT_EQ(directory.Entries().size(), 2u);
   EXPECT_FALSE(ProbeImageFile(source).has_value());
+}
+
+TEST(CompressImageFile, CompressesInPlace) {
+  TempDirectory directory;
+  const auto path = directory.File(L"photo.bmp");
+  WriteBmp(path, 80, 40);
+
+  ImageJob job;
+  job.source = path;
+  job.destination = path;
+  job.bounds.max_long_side = 40;
+  const Outcome outcome = CompressImageFile(job);
+
+  ASSERT_EQ(outcome.status, Status::kCompressed) << outcome.message;
+  EXPECT_EQ(outcome.size_bytes, FileSize(path));
+  const auto probe = ProbeImageFile(path);
+  ASSERT_TRUE(probe.has_value());
+  EXPECT_EQ(probe->width, 40);
+  EXPECT_EQ(probe->height, 20);
+  EXPECT_EQ(probe->mime_type.value_or(""), "image/jpeg");
+  EXPECT_EQ(directory.Entries().size(), 1u);
+}
+
+TEST(CompressImageFile, DirectoryDestinationIsUntouched) {
+  TempDirectory directory;
+  const auto source = directory.File(L"source.bmp");
+  const auto folder = directory.File(L"folder");
+  WriteBmp(source, 20, 20);
+  CreateDirectoryW(folder.c_str(), nullptr);
+
+  ImageJob job;
+  job.source = source;
+  job.destination = folder;
+  const Outcome outcome = CompressImageFile(job);
+
+  EXPECT_EQ(outcome.status, Status::kFailed);
+  EXPECT_TRUE(IsDirectory(folder));
+  EXPECT_EQ(directory.Entries().size(), 2u);
 }
 
 TEST(ProbeImageFile, ReadsBmpHeader) {
@@ -175,7 +234,7 @@ TEST(ProbeImageFile, ReadsBmpHeader) {
   EXPECT_EQ(probe->mime_type.value_or(""), "image/bmp");
 }
 
-TEST(TranscodeVideo, CancelledBeforeStartLeavesNoOutput) {
+TEST(TranscodeVideo, CancelledBeforeStartKeepsTheDestination) {
   TempDirectory directory;
   const auto source = directory.File(L"source.bmp");
   const auto destination = directory.File(L"out.mp4");
@@ -190,7 +249,8 @@ TEST(TranscodeVideo, CancelledBeforeStartLeavesNoOutput) {
   const Outcome outcome = TranscodeVideo(job, cancelled, [](double) {});
 
   EXPECT_EQ(outcome.status, Status::kCancelled);
-  EXPECT_EQ(FileSize(destination), -1);
+  EXPECT_EQ(ReadText(destination), "stale");
+  EXPECT_EQ(directory.Entries().size(), 2u);
 }
 
 TEST(TranscodeVideo, NonVideoInputIsRejected) {
@@ -208,7 +268,37 @@ TEST(TranscodeVideo, NonVideoInputIsRejected) {
 
   EXPECT_TRUE(outcome.status == Status::kFailed || outcome.status == Status::kUnsupported);
   EXPECT_EQ(FileSize(destination), -1);
+  EXPECT_EQ(directory.Entries().size(), 1u);
   EXPECT_FALSE(ProbeVideoFile(source).has_value());
+}
+
+TEST(PendingOutput, KeepsTheExtensionAndCleansUp) {
+  TempDirectory directory;
+  const auto destination = directory.File(L"clip.mp4");
+  std::wstring temporary;
+  {
+    PendingOutput output(destination);
+    temporary = output.path();
+    WriteText(temporary, "partial");
+    EXPECT_EQ(temporary.substr(temporary.size() - 4), L".mp4");
+    EXPECT_EQ(temporary.substr(0, temporary.rfind(L'\\')),
+              destination.substr(0, destination.rfind(L'\\')));
+  }
+  EXPECT_EQ(FileSize(temporary), -1);
+  EXPECT_EQ(FileSize(destination), -1);
+}
+
+TEST(PendingOutput, CommitReplacesTheDestination) {
+  TempDirectory directory;
+  const auto destination = directory.File(L"clip.mp4");
+  WriteText(destination, "old");
+  {
+    PendingOutput output(destination);
+    WriteText(output.path(), "new");
+    EXPECT_TRUE(output.Commit());
+  }
+  EXPECT_EQ(ReadText(destination), "new");
+  EXPECT_EQ(directory.Entries().size(), 1u);
 }
 
 }  // namespace test

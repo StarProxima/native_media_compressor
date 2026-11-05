@@ -30,6 +30,11 @@ struct Outcome {
   static Outcome Compressed(int64_t width, int64_t height);
 };
 
+// Message for an operation stopped by a C++ exception, in practice an
+// allocation that failed on a huge frame or image.
+inline constexpr char kUnexpectedError[] =
+    "Stopped by an unexpected error, such as running out of memory";
+
 struct SizeBounds {
   std::optional<int64_t> max_short_side;
   std::optional<int64_t> max_long_side;
@@ -51,9 +56,34 @@ std::string DescribeHresult(const char* step, HRESULT result);
 // File size in bytes, or -1 when the file does not exist.
 int64_t FileSize(const std::wstring& path);
 
+bool IsDirectory(const std::wstring& path);
+
 // Deletes the file if it exists. Retries briefly, because a just released
 // encoder can keep its handle open for a moment.
 void RemoveFile(const std::wstring& path);
+
+// A temporary file next to the destination that receives the output. The
+// destination is replaced only by Commit, so a failed run leaves it as it was
+// and the source may be the destination itself. The temporary file keeps the
+// destination's extension and is deleted unless committed.
+class PendingOutput {
+ public:
+  explicit PendingOutput(const std::wstring& destination);
+  ~PendingOutput();
+  PendingOutput(const PendingOutput&) = delete;
+  PendingOutput& operator=(const PendingOutput&) = delete;
+
+  const std::wstring& path() const { return path_; }
+
+  // Moves the output over the destination. False when that fails.
+  bool Commit();
+
+ private:
+  std::wstring destination_;
+  std::wstring path_;
+  bool reserved_ = false;
+  bool committed_ = false;
+};
 
 // Initializes COM on the calling thread for the lifetime of the scope.
 class ComScope {

@@ -131,9 +131,13 @@ void NativeMediaCompressorPlugin::ProbeImage(
   const std::wstring path = ToWindowsPath(source);
   media_workers_.Submit([this, path, result] {
     std::optional<ImageProbe> probe;
-    if (const auto info = ProbeImageFile(path)) {
-      probe.emplace(info->width, info->height, info->frame_count);
-      if (info->mime_type) probe->set_mime_type(*info->mime_type);
+    try {
+      if (const auto info = ProbeImageFile(path)) {
+        probe.emplace(info->width, info->height, info->frame_count);
+        if (info->mime_type) probe->set_mime_type(*info->mime_type);
+      }
+    } catch (...) {
+      probe.reset();
     }
     dispatcher_.Post([result, probe] { result(probe); });
   });
@@ -145,12 +149,16 @@ void NativeMediaCompressorPlugin::ProbeVideo(
   const std::wstring path = ToWindowsPath(source);
   media_workers_.Submit([this, path, result] {
     std::optional<VideoProbe> probe;
-    if (const auto info = ProbeVideoFile(path)) {
-      probe.emplace(info->width, info->height, info->rotation_degrees, info->duration_ms,
-                    info->is_hdr, info->has_audio);
-      if (info->bitrate) probe->set_bitrate(*info->bitrate);
-      if (info->video_codec) probe->set_video_codec(*info->video_codec);
-      if (info->audio_codec) probe->set_audio_codec(*info->audio_codec);
+    try {
+      if (const auto info = ProbeVideoFile(path)) {
+        probe.emplace(info->width, info->height, info->rotation_degrees, info->duration_ms,
+                      info->is_hdr, info->has_audio);
+        if (info->bitrate) probe->set_bitrate(*info->bitrate);
+        if (info->video_codec) probe->set_video_codec(*info->video_codec);
+        if (info->audio_codec) probe->set_audio_codec(*info->audio_codec);
+      }
+    } catch (...) {
+      probe.reset();
     }
     dispatcher_.Post([result, probe] { result(probe); });
   });

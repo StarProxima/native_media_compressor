@@ -3,6 +3,7 @@
 #include <objbase.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <utility>
 
@@ -79,6 +80,11 @@ int64_t FileSize(const std::wstring& path) {
          static_cast<int64_t>(data.nFileSizeLow);
 }
 
+bool IsDirectory(const std::wstring& path) {
+  const DWORD attributes = GetFileAttributesW(path.c_str());
+  return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+}
+
 void RemoveFile(const std::wstring& path) {
   if (path.empty()) return;
   for (int attempt = 0; attempt < 20; ++attempt) {
@@ -88,6 +94,60 @@ void RemoveFile(const std::wstring& path) {
     if (error != ERROR_SHARING_VIOLATION && error != ERROR_ACCESS_DENIED) return;
     Sleep(50);
   }
+}
+
+namespace {
+
+std::wstring TemporarySibling(const std::wstring& destination, unsigned long long attempt) {
+  static std::atomic<unsigned long> counter{0};
+  const size_t separator = destination.find_last_of(L"\\/");
+  const size_t name_start = separator == std::wstring::npos ? 0 : separator + 1;
+  const size_t dot = destination.find_last_of(L'.');
+  const bool has_extension = dot != std::wstring::npos && dot > name_start;
+  const std::wstring stem = has_extension ? destination.substr(0, dot) : destination;
+  const std::wstring extension = has_extension ? destination.substr(dot) : std::wstring();
+  return stem + L".nmc-" + std::to_wstring(GetCurrentProcessId()) + L"-" +
+         std::to_wstring(++counter) + L"-" + std::to_wstring(GetTickCount64() + attempt) +
+         extension;
+}
+
+}  // namespace
+
+// The temporary name is reserved with CREATE_NEW, so an existing file that
+// happens to have it (even the source) is never overwritten or deleted.
+PendingOutput::PendingOutput(const std::wstring& destination) : destination_(destination) {
+  for (unsigned long long attempt = 0; attempt < 16; ++attempt) {
+    std::wstring candidate = TemporarySibling(destination, attempt);
+    HANDLE file = CreateFileW(candidate.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
+                              FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file != INVALID_HANDLE_VALUE) {
+      CloseHandle(file);
+      path_ = std::move(candidate);
+      reserved_ = true;
+      return;
+    }
+    if (GetLastError() != ERROR_FILE_EXISTS) break;
+  }
+  path_ = TemporarySibling(destination, 0);
+}
+
+PendingOutput::~PendingOutput() {
+  if (reserved_ && !committed_) RemoveFile(path_);
+}
+
+bool PendingOutput::Commit() {
+  // The source may be the destination, and a just released decoder can keep
+  // its handle for a moment, so a busy destination is retried briefly.
+  for (int attempt = 0; attempt < 20; ++attempt) {
+    if (MoveFileExW(path_.c_str(), destination_.c_str(), MOVEFILE_REPLACE_EXISTING)) {
+      committed_ = true;
+      return true;
+    }
+    const DWORD error = GetLastError();
+    if (error != ERROR_SHARING_VIOLATION && error != ERROR_ACCESS_DENIED) return false;
+    Sleep(50);
+  }
+  return false;
 }
 
 ComScope::ComScope()

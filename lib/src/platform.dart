@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:flutter/services.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
@@ -50,6 +51,8 @@ abstract class NativeMediaCompressorPlatform extends PlatformInterface {
 /// except the web.
 class PigeonMediaCompressor extends NativeMediaCompressorPlatform
     implements pigeon.MediaCompressorFlutterApi {
+  static const _maxFrameRate = 240;
+
   /// Creates an implementation that talks to the host through
   /// [binaryMessenger], or through the default messenger when it is null.
   PigeonMediaCompressor({BinaryMessenger? binaryMessenger})
@@ -59,7 +62,10 @@ class PigeonMediaCompressor extends NativeMediaCompressorPlatform
   final BinaryMessenger? _binaryMessenger;
   final pigeon.MediaCompressorHostApi _host;
   final _progress = <int, void Function(double)>{};
-  var _nextTaskId = 0;
+
+  // A hot restart starts a new isolate while the host may still run tasks of
+  // the old one, so ids must not start from the same number every time.
+  var _nextTaskId = Random().nextInt(1 << 30);
   var _isListening = false;
 
   @override
@@ -78,7 +84,7 @@ class PigeonMediaCompressor extends NativeMediaCompressorPlatform
       maxShortSide: options.maxShortSide,
       maxLongSide: options.maxLongSide,
       videoBitrate: options.videoBitrate,
-      maxFrameRate: options.maxFrameRate,
+      maxFrameRate: options.maxFrameRate?.clamp(1, _maxFrameRate),
       maxBytes: options.maxBytes,
       includeAudio: options.includeAudio,
     );
@@ -175,11 +181,16 @@ class PigeonMediaCompressor extends NativeMediaCompressorPlatform
 
   void _listen() {
     if (_isListening) return;
-    _isListening = true;
-    pigeon.MediaCompressorFlutterApi.setUp(
-      this,
-      binaryMessenger: _binaryMessenger,
-    );
+    try {
+      pigeon.MediaCompressorFlutterApi.setUp(
+        this,
+        binaryMessenger: _binaryMessenger,
+      );
+      _isListening = true;
+    } on UnsupportedError {
+      // Background isolates cannot receive platform messages, so progress is
+      // only reported to the root isolate; compression itself still works.
+    }
   }
 
   static Future<CompressionResult> _guard(

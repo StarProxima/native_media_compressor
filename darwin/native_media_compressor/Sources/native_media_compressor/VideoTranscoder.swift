@@ -8,7 +8,8 @@ final class VideoTranscoder {
   private static let watchdogInterval = DispatchTimeInterval.milliseconds(250)
 
   private let request: VideoRequest
-  private let destination: URL
+  private let staged: StagedOutput
+  private var output: URL { staged.file }
   private let isCancelled: () -> Bool
   private let onProgress: (Double) -> Void
   // Every writer input is fed on this queue, so the state below needs no lock.
@@ -16,7 +17,7 @@ final class VideoTranscoder {
   private var stopReply: CompressionReply?
   private var pumps: [TrackPump] = []
   private var writtenSamples = 0
-  private var lastFrameSlot = Int64.min
+  private var lastFrameSlot = -Double.infinity
   private var reportedPercent = -1
 
   init(
@@ -24,28 +25,28 @@ final class VideoTranscoder {
     onProgress: @escaping (Double) -> Void
   ) {
     self.request = request
-    self.destination = URL(fileURLWithPath: request.destination)
+    self.staged = StagedOutput(destination: URL(fileURLWithPath: request.destination))
     self.isCancelled = isCancelled
     self.onProgress = onProgress
   }
 
   /// Blocks the calling thread until the output is finished or abandoned.
   func run() -> CompressionReply {
-    destination.removeFile()
     if isCancelled() { return .status(.cancelled) }
-    let box = ReplyBox()
-    let done = DispatchSemaphore(value: 0)
-    Task {
-      do {
-        box.reply = try await transcode()
-      } catch {
-        box.reply = Self.failure(error)
+    return staged.run {
+      let box = ReplyBox()
+      let done = DispatchSemaphore(value: 0)
+      Task {
+        do {
+          box.reply = try await transcode()
+        } catch {
+          box.reply = Self.failure(error)
+        }
+        done.signal()
       }
-      done.signal()
+      done.wait()
+      return box.reply
     }
-    done.wait()
-    if box.reply.status != .compressed { destination.removeFile() }
-    return box.reply
   }
 
   private func transcode() async throws -> CompressionReply {
@@ -56,16 +57,15 @@ final class VideoTranscoder {
     if video.isHDR, !Self.canToneMap {
       return .status(.unsupported, "HDR to SDR conversion needs iOS 14 or macOS 11")
     }
-    let audioTracks = request.includeAudio ? media.audio : []
-    if let track = audioTracks.first(where: { !$0.isAAC }) {
-      return .status(.unsupported, "audio \(track.codec ?? "of unknown format") is not AAC")
+    let audioPlan = request.includeAudio ? media.audioPlan : AudioPlan()
+    if audioPlan.hasUncopyable {
+      let codec = audioPlan.uncopyableCodec ?? "of unknown format"
+      return .status(.unsupported, "audio \(codec) has no AAC alternative to copy")
     }
-    if request.includeAudio, let track = media.unreadableAudio.first {
-      return .status(.unsupported, "audio \(track.codec ?? "of unknown format") cannot be read")
-    }
+    let audioTracks = audioPlan.tracks
 
     let reader = try AVAssetReader(asset: asset)
-    let writer = try AVAssetWriter(outputURL: destination, fileType: .mp4)
+    let writer = try AVAssetWriter(outputURL: output, fileType: .mp4)
 
     // Asking the decoder for 8-bit BT.709 makes VideoToolbox convert the
     // colours, which tone-maps PQ and HLG input. The writer gets the same tags
@@ -110,7 +110,7 @@ final class VideoTranscoder {
     writer.add(videoInput)
 
     // Screen recordings with a microphone keep system sound and voice in
-    // separate tracks, so every track is copied.
+    // separate tracks that play together, so every played group is copied.
     var audioPumps: [TrackPump] = []
     for track in audioTracks {
       let output = AVAssetReaderTrackOutput(track: track.track, outputSettings: nil)
@@ -156,7 +156,9 @@ final class VideoTranscoder {
         // of a screen recording whose frames come slightly faster than the
         // limit, halving its rate.
         let time = CMSampleBufferGetPresentationTimeStamp(sample).seconds
-        let slot = Int64((time * maxRate).rounded())
+        let slot = (time * maxRate).rounded()
+        // Kept in Double: an Int conversion of a huge or invalid time would trap.
+        guard slot.isFinite else { return true }
         guard slot > lastFrameSlot else { return false }
         lastFrameSlot = slot
         return true
@@ -186,7 +188,7 @@ final class VideoTranscoder {
     await writer.finishWriting()
     guard writer.status == .completed else { return Self.failure(writer.error) }
 
-    let size = destination.fileSize
+    let size = output.fileSize
     if let maxBytes = request.maxBytes, size > maxBytes { return .status(.tooLarge) }
     queue.sync {
       if reportedPercent < 100 {
@@ -229,7 +231,7 @@ final class VideoTranscoder {
         onAppended(sample)
         writtenSamples += 1
         if let maxBytes = request.maxBytes, writtenSamples % Self.sizeCheckSamples == 0,
-          destination.fileSize > maxBytes
+          output.fileSize > maxBytes
         {
           stopReply = .status(.tooLarge)
           stopAll(reader: reader)
@@ -246,7 +248,7 @@ final class VideoTranscoder {
 
   private func reportProgress(at time: Double, duration: Double) {
     guard duration > 0, time.isFinite else { return }
-    let percent = max(0, min(100, Int(time / duration * 100)))
+    let percent = Int(max(0, min(100, time / duration * 100)))
     guard percent > reportedPercent else { return }
     reportedPercent = percent
     onProgress(Double(percent) / 100)

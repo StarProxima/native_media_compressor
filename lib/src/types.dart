@@ -2,7 +2,8 @@ import 'dart:async';
 
 /// How a compression ended.
 ///
-/// Every status except [compressed] leaves no file at the destination.
+/// Every status except [compressed] leaves the destination as it was: the
+/// output is written to a temporary file and moved into place only on success.
 enum CompressionStatus {
   /// The output was written to the destination.
   compressed,
@@ -39,7 +40,10 @@ enum ImageFormat {
 ///
 /// The frame is only ever scaled down, keeping its aspect ratio, until it fits
 /// both [maxShortSide] and [maxLongSide]. The output is SDR H.264 video in an
-/// MP4 container: HDR input is tone-mapped. AAC audio is copied without
+/// MP4 container. HDR input (HLG, PQ, Dolby Vision) is tone-mapped to SDR on
+/// Android 7+ with a decoder for the source profile, iOS 14+ and macOS 11+,
+/// and by the browser on the web where it decodes the source; elsewhere it is
+/// [CompressionStatus.unsupported]. AAC audio is copied without
 /// re-encoding.
 final class VideoOptions {
   /// Creates video compression settings.
@@ -50,7 +54,11 @@ final class VideoOptions {
     this.maxFrameRate = 30,
     this.maxBytes,
     this.includeAudio = true,
-  });
+  }) : assert(maxShortSide == null || maxShortSide > 0),
+       assert(maxLongSide == null || maxLongSide > 0),
+       assert(videoBitrate > 0),
+       assert(maxFrameRate == null || maxFrameRate > 0),
+       assert(maxBytes == null || maxBytes > 0);
 
   /// Upper bound for the shorter side of the frame, in pixels.
   final int? maxShortSide;
@@ -62,6 +70,7 @@ final class VideoOptions {
   final int videoBitrate;
 
   /// Frames above this rate are dropped where the platform supports it.
+  /// Values above 240 are treated as 240.
   final int? maxFrameRate;
 
   /// Compression stops with [CompressionStatus.tooLarge] as soon as the output
@@ -201,7 +210,8 @@ final class VideoMetadata {
   final String? videoCodec;
 
   /// Whether the video uses an HDR transfer function (PQ or HLG), as iPhone
-  /// camera recordings do by default. Compression converts it to SDR.
+  /// camera recordings do by default. See [VideoOptions] for where it can be
+  /// converted to SDR.
   final bool isHdr;
 
   /// Whether there is at least one audio track.
@@ -224,7 +234,9 @@ final class CompressionTask {
   /// Completes when compression ends. Never completes with an error.
   final Future<CompressionResult> result;
 
-  /// Fraction done, from 0 to 1. Closes when [result] completes.
+  /// Fraction done, from 0 to 1. Closes when [result] completes. Only the root
+  /// isolate receives progress; in a background isolate the stream stays
+  /// empty.
   final Stream<double> progress;
 
   final Future<void> Function() _onCancel;

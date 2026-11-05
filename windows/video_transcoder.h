@@ -35,8 +35,8 @@ struct VideoInfo {
 
 // Re-encodes a video to H.264 with AAC audio in MP4 through Media Foundation.
 // Blocks until done; call it from a worker thread. Reports progress from that
-// thread and leaves nothing at the destination unless the status is
-// compressed.
+// thread. The destination is replaced only when the status is compressed and
+// is otherwise left as it was; it may be the source itself.
 Outcome TranscodeVideo(const VideoJob& job, const std::atomic<bool>& cancelled,
                        const std::function<void(double)>& on_progress);
 

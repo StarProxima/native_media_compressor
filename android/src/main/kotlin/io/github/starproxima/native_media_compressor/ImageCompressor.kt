@@ -16,19 +16,22 @@ import java.io.IOException
 
 internal class ImageCompressor(private val source: MediaSource, private val request: ImageRequest) {
     fun run(): CompressionReply {
-        val destination = File(request.destination)
-        destination.delete()
+        val output = try {
+            StagedOutput.create(request.destination)
+        } catch (error: IOException) {
+            return CompressionReply(CompressionStatus.FAILED, message = error.toString())
+        }
         var reply = CompressionReply(CompressionStatus.FAILED)
         try {
-            reply = compress(destination)
+            reply = compress(output.file)
         } catch (error: IOException) {
             reply = CompressionReply(CompressionStatus.FAILED, message = error.toString())
         } catch (error: OutOfMemoryError) {
             reply = CompressionReply(CompressionStatus.FAILED, message = error.toString())
         } finally {
-            if (reply.status != CompressionStatus.COMPRESSED) destination.delete()
+            if (reply.status != CompressionStatus.COMPRESSED) output.discard()
         }
-        return reply
+        return output.finish(reply)
     }
 
     private fun compress(destination: File): CompressionReply {
