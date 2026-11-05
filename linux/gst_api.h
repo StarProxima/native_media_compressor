@@ -31,8 +31,6 @@ namespace native_media_compressor {
   X(gst_element_sync_state_with_parent)     \
   X(gst_bus_timed_pop_filtered)             \
   X(gst_message_parse_error)                \
-  X(gst_message_get_structure)              \
-  X(gst_structure_has_name)                 \
   X(gst_structure_get_name)                 \
   X(gst_structure_get_int)                  \
   X(gst_structure_get_string)               \
@@ -41,7 +39,6 @@ namespace native_media_compressor {
   X(gst_caps_get_structure)                 \
   X(gst_caps_get_size)                      \
   X(gst_pad_link)                           \
-  X(gst_pad_is_linked)                      \
   X(gst_pad_add_probe)                      \
   X(gst_pad_get_current_caps)               \
   X(gst_pad_query_caps)                     \

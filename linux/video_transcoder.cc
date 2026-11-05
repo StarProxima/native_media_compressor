@@ -544,27 +544,14 @@ Outcome Run(const GstApi* g, const VideoJob& job, const Discovery& discovery,
   const auto duration_ns = static_cast<double>(info.duration_ms) * GST_MSECOND;
   std::optional<Outcome> outcome;
   while (!outcome) {
+    // Missing-plugin element messages are not fatal on their own: parsebin
+    // posts them for side streams (timecode, metadata) that are discarded.
     GstMessage* message = g->gst_bus_timed_pop_filtered(
-        bus, 50 * GST_MSECOND,
-        static_cast<GstMessageType>(GST_MESSAGE_EOS | GST_MESSAGE_ERROR | GST_MESSAGE_ELEMENT));
+        bus, 50 * GST_MSECOND, static_cast<GstMessageType>(GST_MESSAGE_EOS | GST_MESSAGE_ERROR));
     if (message != nullptr) {
-      switch (GST_MESSAGE_TYPE(message)) {
-        case GST_MESSAGE_EOS:
-          outcome = Outcome::Of(NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_COMPRESSED);
-          break;
-        case GST_MESSAGE_ERROR:
-          outcome = ClassifyError(g, message);
-          break;
-        case GST_MESSAGE_ELEMENT: {
-          const GstStructure* structure = g->gst_message_get_structure(message);
-          if (structure != nullptr && g->gst_structure_has_name(structure, "missing-plugin")) {
-            outcome = Unsupported("A GStreamer plugin is missing for this file");
-          }
-          break;
-        }
-        default:
-          break;
-      }
+      outcome = GST_MESSAGE_TYPE(message) == GST_MESSAGE_EOS
+                    ? Outcome::Of(NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_COMPRESSED)
+                    : ClassifyError(g, message);
       g->Unref(message);
     }
     if (outcome) break;
