@@ -77,6 +77,10 @@ int64_t CountWebpFrames(const std::string& path);
 // a readable PNG.
 int64_t CountPngFrames(const std::string& path);
 
+// The default image of an APNG as a plain PNG, with the animation chunks
+// removed. False when the file is not a PNG or has no animation chunks.
+bool ReadApngDefaultImage(const std::string& path, std::string* png);
+
 // Width and height from a PNG header; false when the file is not a PNG.
 bool ReadPngSize(const std::string& path, int* width, int* height);
 

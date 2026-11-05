@@ -47,6 +47,27 @@ bool ReadImageHeader(const std::string& path, gint* width, gint* height, std::st
   return false;
 }
 
+// Some gdk-pixbuf versions refuse APNG files outright, so the first frame is
+// decoded from the default image with the animation chunks stripped.
+GdkPixbuf* DecodePngAtSize(const std::string& png, int width, int height, GError** error) {
+  GdkPixbufLoader* loader = gdk_pixbuf_loader_new_with_type("png", error);
+  if (loader == nullptr) return nullptr;
+  gdk_pixbuf_loader_set_size(loader, width, height);
+  const bool written = gdk_pixbuf_loader_write(
+      loader, reinterpret_cast<const guchar*>(png.data()), png.size(), error);
+  // A loader must be closed even after a failed write.
+  const bool closed = gdk_pixbuf_loader_close(loader, written ? error : nullptr);
+  GdkPixbuf* pixbuf = written && closed ? gdk_pixbuf_loader_get_pixbuf(loader) : nullptr;
+  GdkPixbuf* result = nullptr;
+  if (pixbuf != nullptr) {
+    result = gdk_pixbuf_get_width(pixbuf) == width && gdk_pixbuf_get_height(pixbuf) == height
+                 ? GDK_PIXBUF(g_object_ref(pixbuf))
+                 : gdk_pixbuf_scale_simple(pixbuf, width, height, GDK_INTERP_BILINEAR);
+  }
+  g_object_unref(loader);
+  return result;
+}
+
 int64_t FrameCount(const std::string& path, const std::string& mime) {
   int64_t frames = -1;
   if (mime == "image/gif") frames = CountGifFrames(path);
@@ -127,8 +148,14 @@ Outcome Encode(const ImageJob& job, const std::string& output) {
   const int target_height = static_cast<int>(ScaledSide(height, scale));
 
   GError* error = nullptr;
-  GdkPixbuf* decoded = gdk_pixbuf_new_from_file_at_scale(job.source.c_str(), target_width,
-                                                         target_height, FALSE, &error);
+  GdkPixbuf* decoded = nullptr;
+  std::string default_image;
+  if (mime == "image/png" && ReadApngDefaultImage(job.source, &default_image)) {
+    decoded = DecodePngAtSize(default_image, target_width, target_height, &error);
+  } else {
+    decoded = gdk_pixbuf_new_from_file_at_scale(job.source.c_str(), target_width, target_height,
+                                                FALSE, &error);
+  }
   if (decoded == nullptr) {
     // The HEIF and WebP loaders recognize the file but decode through
     // separately packaged codecs (libheif plugins), so a decoding error there

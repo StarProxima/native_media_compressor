@@ -285,6 +285,32 @@ int64_t CountPngFrames(const std::string& path) {
   return result;
 }
 
+bool ReadApngDefaultImage(const std::string& path, std::string* png) {
+  gchar* contents = nullptr;
+  gsize length = 0;
+  if (!g_file_get_contents(path.c_str(), &contents, &length, nullptr)) return false;
+  const auto* data = reinterpret_cast<const uint8_t*>(contents);
+  bool animated = false;
+  if (length >= 8 && memcmp(data, "\x89PNG\r\n\x1a\n", 8) == 0) {
+    png->assign(contents, 8);
+    size_t pos = 8;
+    while (pos + 12 <= length) {
+      const uint32_t size = ByteReader(data + pos, 4, false).U32(0);
+      if (size > length - pos - 12) break;
+      const char* type = contents + pos + 4;
+      if (memcmp(type, "acTL", 4) == 0 || memcmp(type, "fcTL", 4) == 0 ||
+          memcmp(type, "fdAT", 4) == 0) {
+        animated = true;
+      } else {
+        png->append(contents + pos, size + 12);
+      }
+      pos += size + 12;
+    }
+  }
+  g_free(contents);
+  return animated;
+}
+
 bool ReadPngSize(const std::string& path, int* width, int* height) {
   const std::vector<uint8_t> data = ReadHead(path, 24);
   if (data.size() < 24 || memcmp(data.data(), "\x89PNG\r\n\x1a\n", 8) != 0 ||
