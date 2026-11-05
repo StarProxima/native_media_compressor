@@ -106,7 +106,8 @@ internal class VideoTranscoder(
             // as 19200 fps, which the encoder's rate control must not see.
             val frameRate = (listOfNotNull(sourceFrameRate, maxFrameRate).minOrNull() ?: DEFAULT_FRAME_RATE)
                 .coerceAtMost(MAX_ENCODER_FRAME_RATE)
-            val out = Scaling.videoSize(stored, request.maxShortSide, request.maxLongSide)
+            encoder = codec("H.264 encoder") { MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC) }
+            val out = outputSize(stored, videoCapabilities(encoder))
 
             val encoderFormat = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, out.width, out.height).apply {
                 setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
@@ -119,7 +120,6 @@ internal class VideoTranscoder(
                     setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_LIMITED)
                 }
             }
-            encoder = codec("H.264 encoder") { MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC) }
             codec("H.264 encoder for ${out.width}x${out.height}") {
                 encoder.configure(encoderFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
             }
@@ -196,6 +196,21 @@ internal class VideoTranscoder(
             runCatching { muxer?.release() }
             extractors.forEach { runCatching { it.release() } }
         }
+    }
+
+    /**
+     * Stored size of the output, aligned to what [capabilities] require (usually
+     * even sides). Encoders that reject that size get multiples of 16, which every
+     * H.264 encoder takes.
+     */
+    private fun outputSize(stored: Size, capabilities: MediaCodecInfo.VideoCapabilities?): Size {
+        val aligned = Scaling.videoSize(
+            stored, request.maxShortSide, request.maxLongSide,
+            widthAlignment = capabilities?.widthAlignment ?: 2,
+            heightAlignment = capabilities?.heightAlignment ?: 2,
+        )
+        if (capabilities == null || capabilities.isSizeSupported(aligned.width, aligned.height)) return aligned
+        return Scaling.videoSize(stored, request.maxShortSide, request.maxLongSide, widthAlignment = 16, heightAlignment = 16)
     }
 
     private interface DecodedFrames {
@@ -407,6 +422,15 @@ internal class VideoTranscoder(
         } catch (error: Exception) {
             throw Stop(CompressionStatus.UNSUPPORTED, "no $what: $error")
         }
+
+        fun videoCapabilities(codec: MediaCodec): MediaCodecInfo.VideoCapabilities? = runCatching {
+            val info = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                codec.codecInfo
+            } else {
+                MediaCodecList(MediaCodecList.ALL_CODECS).codecInfos.first { it.name == codec.name }
+            }
+            info.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC).videoCapabilities
+        }.getOrNull()
 
         /** Whether the stream's profile carries 10-bit samples; HDR without a known profile is assumed to. */
         fun isTenBit(format: MediaFormat): Boolean {
