@@ -16,7 +16,7 @@ final class VideoTranscoder {
   private var stopReply: CompressionReply?
   private var pumps: [TrackPump] = []
   private var writtenSamples = 0
-  private var lastFrameTime = CMTime.invalid
+  private var lastFrameSlot = Int64.min
   private var reportedPercent = -1
 
   init(
@@ -53,9 +53,9 @@ final class VideoTranscoder {
     let media = try await MediaAsset.load(asset)
     guard let video = media.video, video.naturalSize.width > 0, video.naturalSize.height > 0
     else { return .status(.unsupported, "no video track") }
-    // Decoding PQ or HLG frames into 8-bit buffers without tone mapping would
-    // give washed-out colours.
-    if video.isHDR { return .status(.unsupported, "HDR video is not converted") }
+    if video.isHDR, !Self.canToneMap {
+      return .status(.unsupported, "HDR to SDR conversion needs iOS 14 or macOS 11")
+    }
     let audioTracks = request.includeAudio ? media.audio : []
     if let track = audioTracks.first(where: { !$0.isAAC }) {
       return .status(.unsupported, "audio \(track.codec ?? "of unknown format") is not AAC")
@@ -67,10 +67,14 @@ final class VideoTranscoder {
     let reader = try AVAssetReader(asset: asset)
     let writer = try AVAssetWriter(outputURL: destination, fileType: .mp4)
 
+    // Asking the decoder for 8-bit BT.709 makes VideoToolbox convert the
+    // colours, which tone-maps PQ and HLG input. The writer gets the same tags
+    // so players do not treat the result as wide gamut or HDR.
     let videoOutput = AVAssetReaderTrackOutput(
       track: video.track,
       outputSettings: [
-        kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+        kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+        AVVideoColorPropertiesKey: Self.bt709,
       ])
     videoOutput.alwaysCopiesSampleData = false
     guard reader.canAdd(videoOutput) else { return .status(.unsupported, "cannot decode video") }
@@ -83,8 +87,8 @@ final class VideoTranscoder {
     let scale = Scaling.factor(
       width: Double(display.width), height: Double(display.height),
       maxShortSide: request.maxShortSide, maxLongSide: request.maxLongSide)
-    let width = Self.alignTo16(Double(video.naturalSize.width) * scale)
-    let height = Self.alignTo16(Double(video.naturalSize.height) * scale)
+    let width = Self.evenSide(Double(video.naturalSize.width) * scale)
+    let height = Self.evenSide(Double(video.naturalSize.height) * scale)
     let videoInput = AVAssetWriterInput(
       mediaType: .video,
       outputSettings: [
@@ -92,6 +96,7 @@ final class VideoTranscoder {
         AVVideoWidthKey: width,
         AVVideoHeightKey: height,
         AVVideoScalingModeKey: AVVideoScalingModeResize,
+        AVVideoColorPropertiesKey: Self.bt709,
         AVVideoCompressionPropertiesKey: [
           AVVideoAverageBitRateKey: request.videoBitrate,
           AVVideoExpectedSourceFrameRateKey: frameRate,
@@ -128,7 +133,6 @@ final class VideoTranscoder {
     }
     writer.startSession(atSourceTime: .zero)
 
-    let minFrameInterval = maxRate.map { CMTime(seconds: 1 / $0 - 0.002, preferredTimescale: 600_000) }
     let duration = media.duration.seconds
     let videoPump = TrackPump(output: videoOutput, input: videoInput)
     await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
@@ -146,12 +150,15 @@ final class VideoTranscoder {
       }
       watchdog.resume()
       run(videoPump, reader: reader, writer: writer) { [self] sample in
-        guard let minFrameInterval else { return true }
-        let time = CMSampleBufferGetPresentationTimeStamp(sample)
-        if lastFrameTime.isValid, CMTimeSubtract(time, lastFrameTime) < minFrameInterval {
-          return false
-        }
-        lastFrameTime = time
+        guard let maxRate else { return true }
+        // One frame per slot of a fixed grid at the target rate. Measuring
+        // from the last kept frame instead would keep only every second frame
+        // of a screen recording whose frames come slightly faster than the
+        // limit, halving its rate.
+        let time = CMSampleBufferGetPresentationTimeStamp(sample).seconds
+        let slot = Int64((time * maxRate).rounded())
+        guard slot > lastFrameSlot else { return false }
+        lastFrameSlot = slot
         return true
       } onAppended: { [self] sample in
         reportProgress(at: CMSampleBufferGetPresentationTimeStamp(sample).seconds, duration: duration)
@@ -264,9 +271,24 @@ final class VideoTranscoder {
     return underlying?.domain == NSOSStatusErrorDomain && underlying?.code == -12903
   }
 
-  // Hardware H.264 encoders reliably accept only sizes that are multiples of 16.
-  private static func alignTo16(_ value: Double) -> Int {
-    max(16, Int(value) / 16 * 16)
+  private static let bt709: [String: Any] = [
+    AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
+    AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
+    AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2,
+  ]
+
+  /// VideoToolbox tone-maps PQ and HLG to SDR from iOS 14 and macOS 11 on.
+  private static var canToneMap: Bool {
+    if #available(iOS 14, macOS 11, *) { return true }
+    return false
+  }
+
+  // 4:2:0 chroma needs even sides; anything coarser, such as multiples of 16,
+  // visibly stretches odd sizes like 1206x2622. Rounding to the nearest pixel
+  // first keeps 1206 * (720 / 1206) at 720 instead of 718.
+  private static func evenSide(_ value: Double) -> Int {
+    let side = Int(value.rounded())
+    return max(2, side - side % 2)
   }
 }
 

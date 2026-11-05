@@ -120,6 +120,7 @@ struct MediaAsset {
       durationMs: seconds.isFinite ? Int64((seconds * 1000).rounded()) : 0,
       bitrate: dataRate > 0 ? Int64(dataRate.rounded()) : nil,
       videoCodec: video.codec,
+      isHdr: video.isHDR,
       hasAudio: !media.audio.isEmpty || !media.unreadableAudio.isEmpty,
       audioCodec: media.audio.first?.codec ?? media.unreadableAudio.first?.codec)
   }
