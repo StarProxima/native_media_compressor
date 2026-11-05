@@ -285,6 +285,21 @@ int64_t CountPngFrames(const std::string& path) {
   return result;
 }
 
+bool ReadPngSize(const std::string& path, int* width, int* height) {
+  const std::vector<uint8_t> data = ReadHead(path, 24);
+  if (data.size() < 24 || memcmp(data.data(), "\x89PNG\r\n\x1a\n", 8) != 0 ||
+      memcmp(&data[12], "IHDR", 4) != 0) {
+    return false;
+  }
+  const ByteReader reader(data.data(), data.size(), false);
+  const uint32_t w = reader.U32(16);
+  const uint32_t h = reader.U32(20);
+  if (w == 0 || h == 0 || w > 0x7FFFFFFF || h > 0x7FFFFFFF) return false;
+  *width = static_cast<int>(w);
+  *height = static_cast<int>(h);
+  return true;
+}
+
 std::string SniffImageMime(const std::string& path) {
   const std::vector<uint8_t> data = ReadHead(path, 64);
   const size_t size = data.size();

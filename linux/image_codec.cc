@@ -32,6 +32,21 @@ std::string MimeOf(const std::string& path, GdkPixbufFormat* format) {
   return mime;
 }
 
+// gdk-pixbuf 2.44 with glycin loaders gives no file info for an animated PNG,
+// so PNG sizes fall back to the file header.
+bool ReadImageHeader(const std::string& path, gint* width, gint* height, std::string* mime) {
+  GdkPixbufFormat* format = gdk_pixbuf_get_file_info(path.c_str(), width, height);
+  if (format != nullptr && *width > 0 && *height > 0) {
+    *mime = MimeOf(path, format);
+    return true;
+  }
+  if (ReadPngSize(path, width, height)) {
+    *mime = "image/png";
+    return true;
+  }
+  return false;
+}
+
 int64_t FrameCount(const std::string& path, const std::string& mime) {
   int64_t frames = -1;
   if (mime == "image/gif") frames = CountGifFrames(path);
@@ -94,8 +109,8 @@ Outcome Fail(NmcCompressionStatus status, std::string message) {
 Outcome Encode(const ImageJob& job, const std::string& output) {
   gint width = 0;
   gint height = 0;
-  GdkPixbufFormat* format = gdk_pixbuf_get_file_info(job.source.c_str(), &width, &height);
-  if (format == nullptr || width <= 0 || height <= 0) {
+  std::string mime;
+  if (!ReadImageHeader(job.source, &width, &height, &mime)) {
     const std::string sniffed = SniffImageMime(job.source);
     if (NeedsLoaderPlugin(sniffed)) {
       return Fail(NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_UNSUPPORTED,
@@ -104,7 +119,6 @@ Outcome Encode(const ImageJob& job, const std::string& output) {
     return Fail(NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_FAILED,
                 "Unrecognized or unreadable image");
   }
-  const std::string mime = MimeOf(job.source, format);
 
   // The bounds are on the short and long side, so the factor is the same
   // before and after orientation is applied.
@@ -178,10 +192,8 @@ std::optional<ImageInfo> ProbeImageFile(const std::string& path) {
   try {
     gint width = 0;
     gint height = 0;
-    GdkPixbufFormat* format = gdk_pixbuf_get_file_info(path.c_str(), &width, &height);
-    if (format == nullptr || width <= 0 || height <= 0) return std::nullopt;
     ImageInfo info;
-    info.mime_type = MimeOf(path, format);
+    if (!ReadImageHeader(path, &width, &height, &info.mime_type)) return std::nullopt;
     const bool swapped = info.mime_type == "image/jpeg" && ReadJpegOrientation(path) >= 5;
     info.width = swapped ? height : width;
     info.height = swapped ? width : height;

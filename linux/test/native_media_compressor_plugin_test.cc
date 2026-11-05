@@ -217,6 +217,88 @@ TEST(CountPngFrames, ReadsTheAnimationControlChunk) {
   RemoveFile(path);
 }
 
+TEST(AnimatedPng, ProbesAndCompressesTheFirstFrame) {
+  const auto crc32 = [](const uint8_t* data, size_t size) {
+    uint32_t crc = 0xFFFFFFFF;
+    for (size_t i = 0; i < size; i++) {
+      crc ^= data[i];
+      for (int bit = 0; bit < 8; bit++) crc = (crc >> 1) ^ (0xEDB88320 & (0 - (crc & 1)));
+    }
+    return ~crc;
+  };
+  const auto be32 = [](std::vector<uint8_t>& out, uint32_t value) {
+    out.insert(out.end(), {static_cast<uint8_t>(value >> 24), static_cast<uint8_t>(value >> 16),
+                           static_cast<uint8_t>(value >> 8), static_cast<uint8_t>(value)});
+  };
+  const auto chunk = [&](std::vector<uint8_t>& out, const char* type,
+                         const std::vector<uint8_t>& data) {
+    be32(out, static_cast<uint32_t>(data.size()));
+    std::vector<uint8_t> body(type, type + 4);
+    body.insert(body.end(), data.begin(), data.end());
+    out.insert(out.end(), body.begin(), body.end());
+    be32(out, crc32(body.data(), body.size()));
+  };
+  const auto frame_control = [&](uint32_t sequence) {
+    std::vector<uint8_t> data;
+    for (uint32_t value : {sequence, 40u, 30u, 0u, 0u}) be32(data, value);
+    data.insert(data.end(), {0, 1, 0, 10, 0, 0});
+    return data;
+  };
+
+  const std::string plain = TempPath("apng-plain.png");
+  GdkPixbuf* pixbuf = SolidPixbuf(40, 30, false, 0x3366CCFF);
+  ASSERT_TRUE(gdk_pixbuf_save(pixbuf, plain.c_str(), "png", nullptr, nullptr));
+  g_object_unref(pixbuf);
+  const std::vector<uint8_t> source = ReadBytes(plain);
+  RemoveFile(plain);
+
+  // Split the plain PNG into chunks and add a second frame reusing its pixels.
+  std::vector<uint8_t> apng(source.begin(), source.begin() + 8);
+  std::vector<uint8_t> image_data;
+  for (size_t pos = 8; pos + 12 <= source.size();) {
+    const uint32_t length = (uint32_t{source[pos]} << 24) | (uint32_t{source[pos + 1]} << 16) |
+                            (uint32_t{source[pos + 2]} << 8) | source[pos + 3];
+    const std::string type(source.begin() + pos + 4, source.begin() + pos + 8);
+    const std::vector<uint8_t> data(source.begin() + pos + 8, source.begin() + pos + 8 + length);
+    if (type == "IDAT") {
+      if (image_data.empty()) {
+        chunk(apng, "acTL", {0, 0, 0, 2, 0, 0, 0, 0});
+        chunk(apng, "fcTL", frame_control(0));
+      }
+      image_data.insert(image_data.end(), data.begin(), data.end());
+      chunk(apng, "IDAT", data);
+    } else if (type == "IEND") {
+      chunk(apng, "fcTL", frame_control(1));
+      std::vector<uint8_t> frame_data;
+      be32(frame_data, 2);
+      frame_data.insert(frame_data.end(), image_data.begin(), image_data.end());
+      chunk(apng, "fdAT", frame_data);
+      chunk(apng, "IEND", {});
+    } else {
+      chunk(apng, type.c_str(), data);
+    }
+    pos += 12 + length;
+  }
+
+  ImageJob job;
+  job.source = TempPath("animated.png");
+  job.destination = TempPath("animated-out.jpg");
+  job.bounds.max_long_side = 20;
+  WriteBytes(job.source, apng);
+  const std::optional<ImageInfo> info = ProbeImageFile(job.source);
+  ASSERT_TRUE(info.has_value());
+  EXPECT_EQ(info->width, 40);
+  EXPECT_EQ(info->height, 30);
+  EXPECT_EQ(info->frame_count, 2);
+  EXPECT_EQ(info->mime_type, "image/png");
+  const Outcome outcome = CompressImageFile(job);
+  EXPECT_EQ(outcome.status, NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_COMPRESSED) << outcome.message;
+  EXPECT_EQ(outcome.width, 20);
+  EXPECT_EQ(outcome.height, 15);
+  RemoveFile(job.source);
+  RemoveFile(job.destination);
+}
+
 TEST(SniffImageMime, TellsHeicFromAvif) {
   std::vector<uint8_t> heic = {0, 0, 0, 24};
   Append(heic, "ftypmif1");

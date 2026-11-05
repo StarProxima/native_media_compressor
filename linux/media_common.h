@@ -77,6 +77,9 @@ int64_t CountWebpFrames(const std::string& path);
 // a readable PNG.
 int64_t CountPngFrames(const std::string& path);
 
+// Width and height from a PNG header; false when the file is not a PNG.
+bool ReadPngSize(const std::string& path, int* width, int* height);
+
 // Image MIME type from the file signature, or empty when unknown.
 std::string SniffImageMime(const std::string& path);
 
