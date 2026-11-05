@@ -14,17 +14,20 @@ enum ImageCodec {
   }
 
   static func compress(_ request: ImageRequest) -> CompressionReply {
-    let destination = URL(fileURLWithPath: request.destination)
-    destination.removeFile()
-    let reply = encode(request, to: destination)
-    if reply.status != .compressed { destination.removeFile() }
-    return reply
+    let staged = StagedOutput(destination: URL(fileURLWithPath: request.destination))
+    return staged.run { encode(request, to: staged.file) }
   }
 
-  private static func encode(_ request: ImageRequest, to destination: URL) -> CompressionReply {
-    guard let source = openSource(request.source), let header = Header(source) else {
-      return .status(.failed, "cannot read image")
+  private static func encode(_ request: ImageRequest, to output: URL) -> CompressionReply {
+    guard FileManager.default.isReadableFile(atPath: request.source),
+      let source = openSource(request.source)
+    else { return .status(.failed, "cannot read \(request.source)") }
+    // No type identifier means ImageIO has no decoder for this format on this
+    // OS version, such as WebP before iOS 14.
+    guard CGImageSourceGetType(source) != nil else {
+      return .status(.unsupported, "ImageIO cannot decode this format")
     }
+    guard let header = Header(source) else { return .status(.failed, "cannot read image") }
     let scale = Scaling.factor(
       width: Double(header.width), height: Double(header.height),
       maxShortSide: request.maxShortSide, maxLongSide: request.maxLongSide)
@@ -51,19 +54,19 @@ enum ImageCodec {
     }
 
     let type = (isJpeg ? "public.jpeg" : "public.png") as CFString
-    guard let output = CGImageDestinationCreateWithURL(destination as CFURL, type, 1, nil) else {
-      return .status(.failed, "cannot create \(destination.path)")
+    guard let encoder = CGImageDestinationCreateWithURL(output as CFURL, type, 1, nil) else {
+      return .status(.failed, "cannot create \(output.path)")
     }
     var properties: [CFString: Any] = [:]
     if isJpeg {
       properties[kCGImageDestinationLossyCompressionQuality] =
         Double(min(100, max(0, request.quality))) / 100
     }
-    CGImageDestinationAddImage(output, image, properties as CFDictionary)
-    guard CGImageDestinationFinalize(output) else { return .status(.failed, "cannot encode image") }
+    CGImageDestinationAddImage(encoder, image, properties as CFDictionary)
+    guard CGImageDestinationFinalize(encoder) else { return .status(.failed, "cannot encode image") }
     return CompressionReply(
       status: .compressed, width: Int64(width), height: Int64(height),
-      sizeBytes: destination.fileSize)
+      sizeBytes: output.fileSize)
   }
 
   private static func openSource(_ path: String) -> CGImageSource? {

@@ -10,9 +10,9 @@ import 'package:flutter/services.dart';
 import 'package:meta/meta.dart' show immutable, protected, visibleForTesting;
 
 Object? _extractReplyValueOrThrow(
-  List<Object?>? replyList,
-  String channelName, {
-  required bool isNullValid,
+    List<Object?>? replyList,
+    String channelName, {
+    required bool isNullValid,
 }) {
   if (replyList == null) {
     throw PlatformException(
@@ -34,11 +34,8 @@ Object? _extractReplyValueOrThrow(
   return replyList.firstOrNull;
 }
 
-List<Object?> wrapResponse({
-  Object? result,
-  PlatformException? error,
-  bool empty = false,
-}) {
+
+List<Object?> wrapResponse({Object? result, PlatformException? error, bool empty = false}) {
   if (empty) {
     return <Object?>[];
   }
@@ -47,7 +44,6 @@ List<Object?> wrapResponse({
   }
   return <Object?>[error.code, error.message, error.details];
 }
-
 bool _deepEquals(Object? a, Object? b) {
   if (identical(a, b)) {
     return true;
@@ -60,9 +56,8 @@ bool _deepEquals(Object? a, Object? b) {
   }
   if (a is List && b is List) {
     return a.length == b.length &&
-        a.indexed.every(
-          ((int, dynamic) item) => _deepEquals(item.$2, b[item.$1]),
-        );
+        a.indexed
+            .every(((int, dynamic) item) => _deepEquals(item.$2, b[item.$1]));
   }
   if (a is Map && b is Map) {
     if (a.length != b.length) {
@@ -111,6 +106,7 @@ int _deepHash(Object? value) {
   return value.hashCode;
 }
 
+
 enum CompressionStatus {
   compressed,
   unsupported,
@@ -120,7 +116,10 @@ enum CompressionStatus {
   failed,
 }
 
-enum ImageFormat { jpeg, png }
+enum ImageFormat {
+  jpeg,
+  png,
+}
 
 class VideoRequest {
   VideoRequest({
@@ -164,8 +163,7 @@ class VideoRequest {
   }
 
   Object encode() {
-    return _toList();
-  }
+    return _toList();  }
 
   static VideoRequest decode(Object result) {
     result as List<Object?>;
@@ -190,14 +188,7 @@ class VideoRequest {
     if (identical(this, other)) {
       return true;
     }
-    return _deepEquals(source, other.source) &&
-        _deepEquals(destination, other.destination) &&
-        _deepEquals(maxShortSide, other.maxShortSide) &&
-        _deepEquals(maxLongSide, other.maxLongSide) &&
-        _deepEquals(videoBitrate, other.videoBitrate) &&
-        _deepEquals(maxFrameRate, other.maxFrameRate) &&
-        _deepEquals(maxBytes, other.maxBytes) &&
-        _deepEquals(includeAudio, other.includeAudio);
+    return _deepEquals(source, other.source) && _deepEquals(destination, other.destination) && _deepEquals(maxShortSide, other.maxShortSide) && _deepEquals(maxLongSide, other.maxLongSide) && _deepEquals(videoBitrate, other.videoBitrate) && _deepEquals(maxFrameRate, other.maxFrameRate) && _deepEquals(maxBytes, other.maxBytes) && _deepEquals(includeAudio, other.includeAudio);
   }
 
   @override
@@ -239,8 +230,7 @@ class ImageRequest {
   }
 
   Object encode() {
-    return _toList();
-  }
+    return _toList();  }
 
   static ImageRequest decode(Object result) {
     result as List<Object?>;
@@ -263,12 +253,7 @@ class ImageRequest {
     if (identical(this, other)) {
       return true;
     }
-    return _deepEquals(source, other.source) &&
-        _deepEquals(destination, other.destination) &&
-        _deepEquals(maxShortSide, other.maxShortSide) &&
-        _deepEquals(maxLongSide, other.maxLongSide) &&
-        _deepEquals(format, other.format) &&
-        _deepEquals(quality, other.quality);
+    return _deepEquals(source, other.source) && _deepEquals(destination, other.destination) && _deepEquals(maxShortSide, other.maxShortSide) && _deepEquals(maxLongSide, other.maxLongSide) && _deepEquals(format, other.format) && _deepEquals(quality, other.quality);
   }
 
   @override
@@ -296,12 +281,17 @@ class CompressionReply {
   String? message;
 
   List<Object?> _toList() {
-    return <Object?>[status, width, height, sizeBytes, message];
+    return <Object?>[
+      status,
+      width,
+      height,
+      sizeBytes,
+      message,
+    ];
   }
 
   Object encode() {
-    return _toList();
-  }
+    return _toList();  }
 
   static CompressionReply decode(Object result) {
     result as List<Object?>;
@@ -323,11 +313,7 @@ class CompressionReply {
     if (identical(this, other)) {
       return true;
     }
-    return _deepEquals(status, other.status) &&
-        _deepEquals(width, other.width) &&
-        _deepEquals(height, other.height) &&
-        _deepEquals(sizeBytes, other.sizeBytes) &&
-        _deepEquals(message, other.message);
+    return _deepEquals(status, other.status) && _deepEquals(width, other.width) && _deepEquals(height, other.height) && _deepEquals(sizeBytes, other.sizeBytes) && _deepEquals(message, other.message);
   }
 
   @override
@@ -352,12 +338,16 @@ class ImageProbe {
   String? mimeType;
 
   List<Object?> _toList() {
-    return <Object?>[width, height, frameCount, mimeType];
+    return <Object?>[
+      width,
+      height,
+      frameCount,
+      mimeType,
+    ];
   }
 
   Object encode() {
-    return _toList();
-  }
+    return _toList();  }
 
   static ImageProbe decode(Object result) {
     result as List<Object?>;
@@ -378,10 +368,7 @@ class ImageProbe {
     if (identical(this, other)) {
       return true;
     }
-    return _deepEquals(width, other.width) &&
-        _deepEquals(height, other.height) &&
-        _deepEquals(frameCount, other.frameCount) &&
-        _deepEquals(mimeType, other.mimeType);
+    return _deepEquals(width, other.width) && _deepEquals(height, other.height) && _deepEquals(frameCount, other.frameCount) && _deepEquals(mimeType, other.mimeType);
   }
 
   @override
@@ -435,8 +422,7 @@ class VideoProbe {
   }
 
   Object encode() {
-    return _toList();
-  }
+    return _toList();  }
 
   static VideoProbe decode(Object result) {
     result as List<Object?>;
@@ -462,21 +448,14 @@ class VideoProbe {
     if (identical(this, other)) {
       return true;
     }
-    return _deepEquals(width, other.width) &&
-        _deepEquals(height, other.height) &&
-        _deepEquals(rotationDegrees, other.rotationDegrees) &&
-        _deepEquals(durationMs, other.durationMs) &&
-        _deepEquals(bitrate, other.bitrate) &&
-        _deepEquals(videoCodec, other.videoCodec) &&
-        _deepEquals(isHdr, other.isHdr) &&
-        _deepEquals(hasAudio, other.hasAudio) &&
-        _deepEquals(audioCodec, other.audioCodec);
+    return _deepEquals(width, other.width) && _deepEquals(height, other.height) && _deepEquals(rotationDegrees, other.rotationDegrees) && _deepEquals(durationMs, other.durationMs) && _deepEquals(bitrate, other.bitrate) && _deepEquals(videoCodec, other.videoCodec) && _deepEquals(isHdr, other.isHdr) && _deepEquals(hasAudio, other.hasAudio) && _deepEquals(audioCodec, other.audioCodec);
   }
 
   @override
   // ignore: avoid_equals_and_hash_code_on_mutable_classes
   int get hashCode => _deepHash(<Object?>[runtimeType, ..._toList()]);
 }
+
 
 class _PigeonCodec extends StandardMessageCodec {
   const _PigeonCodec();
@@ -485,25 +464,25 @@ class _PigeonCodec extends StandardMessageCodec {
     if (value is int) {
       buffer.putUint8(4);
       buffer.putInt64(value);
-    } else if (value is CompressionStatus) {
+    }    else if (value is CompressionStatus) {
       buffer.putUint8(129);
       writeValue(buffer, value.index);
-    } else if (value is ImageFormat) {
+    }    else if (value is ImageFormat) {
       buffer.putUint8(130);
       writeValue(buffer, value.index);
-    } else if (value is VideoRequest) {
+    }    else if (value is VideoRequest) {
       buffer.putUint8(131);
       writeValue(buffer, value.encode());
-    } else if (value is ImageRequest) {
+    }    else if (value is ImageRequest) {
       buffer.putUint8(132);
       writeValue(buffer, value.encode());
-    } else if (value is CompressionReply) {
+    }    else if (value is CompressionReply) {
       buffer.putUint8(133);
       writeValue(buffer, value.encode());
-    } else if (value is ImageProbe) {
+    }    else if (value is ImageProbe) {
       buffer.putUint8(134);
       writeValue(buffer, value.encode());
-    } else if (value is VideoProbe) {
+    }    else if (value is VideoProbe) {
       buffer.putUint8(135);
       writeValue(buffer, value.encode());
     } else {
@@ -540,122 +519,106 @@ class MediaCompressorHostApi {
   /// Constructor for [MediaCompressorHostApi].  The [binaryMessenger] named argument is
   /// available for dependency injection.  If it is left null, the default
   /// BinaryMessenger will be used which routes to the host platform.
-  MediaCompressorHostApi({
-    BinaryMessenger? binaryMessenger,
-    String messageChannelSuffix = '',
-  }) : pigeonVar_binaryMessenger = binaryMessenger,
-       pigeonVar_messageChannelSuffix =
-           messageChannelSuffix.isNotEmpty ? '.$messageChannelSuffix' : '';
+  MediaCompressorHostApi({BinaryMessenger? binaryMessenger, String messageChannelSuffix = ''})
+      : pigeonVar_binaryMessenger = binaryMessenger,
+        pigeonVar_messageChannelSuffix = messageChannelSuffix.isNotEmpty ? '.$messageChannelSuffix' : '';
   final BinaryMessenger? pigeonVar_binaryMessenger;
 
   static const MessageCodec<Object?> pigeonChannelCodec = _PigeonCodec();
 
   final String pigeonVar_messageChannelSuffix;
 
-  Future<CompressionReply> compressVideo(
-    int taskId,
-    VideoRequest request,
-  ) async {
-    final pigeonVar_channelName =
-        'dev.flutter.pigeon.native_media_compressor.MediaCompressorHostApi.compressVideo$pigeonVar_messageChannelSuffix';
+  Future<CompressionReply> compressVideo(int taskId, VideoRequest request) async {
+    final pigeonVar_channelName = 'dev.flutter.pigeon.native_media_compressor.MediaCompressorHostApi.compressVideo$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
-      <Object?>[taskId, request],
-    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[taskId, request]);
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
 
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
-      pigeonVar_replyList,
-      pigeonVar_channelName,
-      isNullValid: false,
-    );
+        pigeonVar_replyList,
+        pigeonVar_channelName,
+        isNullValid: false,
+    )
+    ;
     return pigeonVar_replyValue! as CompressionReply;
   }
 
   Future<CompressionReply> compressImage(ImageRequest request) async {
-    final pigeonVar_channelName =
-        'dev.flutter.pigeon.native_media_compressor.MediaCompressorHostApi.compressImage$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName = 'dev.flutter.pigeon.native_media_compressor.MediaCompressorHostApi.compressImage$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
-      <Object?>[request],
-    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[request]);
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
 
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
-      pigeonVar_replyList,
-      pigeonVar_channelName,
-      isNullValid: false,
-    );
+        pigeonVar_replyList,
+        pigeonVar_channelName,
+        isNullValid: false,
+    )
+    ;
     return pigeonVar_replyValue! as CompressionReply;
   }
 
   Future<void> cancel(int taskId) async {
-    final pigeonVar_channelName =
-        'dev.flutter.pigeon.native_media_compressor.MediaCompressorHostApi.cancel$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName = 'dev.flutter.pigeon.native_media_compressor.MediaCompressorHostApi.cancel$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
-      <Object?>[taskId],
-    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[taskId]);
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
 
     _extractReplyValueOrThrow(
-      pigeonVar_replyList,
-      pigeonVar_channelName,
-      isNullValid: true,
-    );
+        pigeonVar_replyList,
+        pigeonVar_channelName,
+        isNullValid: true,
+    )
+    ;
   }
 
   Future<ImageProbe?> probeImage(String source) async {
-    final pigeonVar_channelName =
-        'dev.flutter.pigeon.native_media_compressor.MediaCompressorHostApi.probeImage$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName = 'dev.flutter.pigeon.native_media_compressor.MediaCompressorHostApi.probeImage$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
-      <Object?>[source],
-    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[source]);
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
 
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
-      pigeonVar_replyList,
-      pigeonVar_channelName,
-      isNullValid: true,
-    );
+        pigeonVar_replyList,
+        pigeonVar_channelName,
+        isNullValid: true,
+    )
+    ;
     return pigeonVar_replyValue as ImageProbe?;
   }
 
   Future<VideoProbe?> probeVideo(String source) async {
-    final pigeonVar_channelName =
-        'dev.flutter.pigeon.native_media_compressor.MediaCompressorHostApi.probeVideo$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName = 'dev.flutter.pigeon.native_media_compressor.MediaCompressorHostApi.probeVideo$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
-      <Object?>[source],
-    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[source]);
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
 
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
-      pigeonVar_replyList,
-      pigeonVar_channelName,
-      isNullValid: true,
-    );
+        pigeonVar_replyList,
+        pigeonVar_channelName,
+        isNullValid: true,
+    )
+    ;
     return pigeonVar_replyValue as VideoProbe?;
   }
 }
@@ -665,19 +628,12 @@ abstract class MediaCompressorFlutterApi {
 
   void onProgress(int taskId, double progress);
 
-  static void setUp(
-    MediaCompressorFlutterApi? api, {
-    BinaryMessenger? binaryMessenger,
-    String messageChannelSuffix = '',
-  }) {
-    messageChannelSuffix =
-        messageChannelSuffix.isNotEmpty ? '.$messageChannelSuffix' : '';
+  static void setUp(MediaCompressorFlutterApi? api, {BinaryMessenger? binaryMessenger, String messageChannelSuffix = '',}) {
+    messageChannelSuffix = messageChannelSuffix.isNotEmpty ? '.$messageChannelSuffix' : '';
     {
       final pigeonVar_channel = BasicMessageChannel<Object?>(
-        'dev.flutter.pigeon.native_media_compressor.MediaCompressorFlutterApi.onProgress$messageChannelSuffix',
-        pigeonChannelCodec,
-        binaryMessenger: binaryMessenger,
-      );
+          'dev.flutter.pigeon.native_media_compressor.MediaCompressorFlutterApi.onProgress$messageChannelSuffix', pigeonChannelCodec,
+          binaryMessenger: binaryMessenger);
       if (api == null) {
         pigeonVar_channel.setMessageHandler(null);
       } else {
@@ -690,10 +646,8 @@ abstract class MediaCompressorFlutterApi {
             return wrapResponse(empty: true);
           } on PlatformException catch (e) {
             return wrapResponse(error: e);
-          } catch (e) {
-            return wrapResponse(
-              error: PlatformException(code: 'error', message: e.toString()),
-            );
+          }          catch (e) {
+            return wrapResponse(error: PlatformException(code: 'error', message: e.toString()));
           }
         });
       }

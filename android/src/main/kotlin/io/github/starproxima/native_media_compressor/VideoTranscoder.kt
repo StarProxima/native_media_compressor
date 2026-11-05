@@ -9,6 +9,7 @@ import android.media.MediaFormat
 import android.media.MediaMuxer
 import android.os.Build
 import java.io.File
+import java.io.IOException
 import java.nio.ByteBuffer
 
 /**
@@ -30,20 +31,24 @@ internal class VideoTranscoder(
     private val maxBytes = request.maxBytes?.takeIf { it > 0 } ?: Long.MAX_VALUE
 
     fun run(): CompressionReply {
-        val destination = File(request.destination)
-        destination.delete()
+        if (isCancelled()) return CompressionReply(CompressionStatus.CANCELLED)
+        val output = try {
+            StagedOutput.create(request.destination)
+        } catch (error: IOException) {
+            return CompressionReply(CompressionStatus.FAILED, message = error.toString())
+        }
         var reply = CompressionReply(CompressionStatus.FAILED)
         try {
             val size = try {
-                transcode(destination, shaderTransfer = null)
+                transcode(output.file, shaderTransfer = null)
             } catch (restart: ToneMapInShader) {
-                transcode(destination, restart.transfer)
+                transcode(output.file, restart.transfer)
             }
             reply = CompressionReply(
                 CompressionStatus.COMPRESSED,
                 width = size.width.toLong(),
                 height = size.height.toLong(),
-                sizeBytes = destination.length(),
+                sizeBytes = output.file.length(),
             )
         } catch (stop: Stop) {
             reply = CompressionReply(stop.status, message = stop.message)
@@ -52,9 +57,9 @@ internal class VideoTranscoder(
         } catch (error: Exception) {
             reply = CompressionReply(CompressionStatus.FAILED, message = error.toString())
         } finally {
-            if (reply.status != CompressionStatus.COMPRESSED) destination.delete()
+            if (reply.status != CompressionStatus.COMPRESSED) output.discard()
         }
-        return reply
+        return output.finish(reply)
     }
 
     /**
@@ -73,14 +78,24 @@ internal class VideoTranscoder(
             val videoExtractor = source.openExtractor().also(extractors::add)
             val videoTrack = videoExtractor.tracks("video/").firstOrNull()
                 ?: throw Stop(CompressionStatus.UNSUPPORTED, "no video track")
-            val sourceFormat = videoExtractor.getTrackFormat(videoTrack)
-            val transfer = shaderTransfer ?: VideoProber.hdrTransfer(source, sourceFormat)
+            val trackFormat = videoExtractor.getTrackFormat(videoTrack)
+            val (sourceFormat, decoderName) = findDecoder(trackFormat)
+            val transfer = shaderTransfer ?: VideoProber.hdrTransfer(source, trackFormat).let {
+                // Dolby Vision is PQ-based when the track does not name a transfer;
+                // an explicit SDR transfer (profile 8.2) stays SDR.
+                val unnamed = !trackFormat.containsKey(MediaFormat.KEY_COLOR_TRANSFER)
+                if (!it.isHdr && unnamed && trackFormat.mime == MediaFormat.MIMETYPE_VIDEO_DOLBY_VISION) {
+                    HdrTransfer.PQ
+                } else {
+                    it
+                }
+            }
             if (transfer.isHdr && Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
                 throw Stop(CompressionStatus.UNSUPPORTED, "HDR video needs API 24")
             }
             // HDR streams are mostly 10-bit, which many decoders lack (the profile tells).
-            if (transfer.isHdr && MediaCodecList(MediaCodecList.REGULAR_CODECS).findDecoderForFormat(sourceFormat) == null) {
-                throw Stop(CompressionStatus.UNSUPPORTED, "no decoder for this HDR stream: $sourceFormat")
+            if (transfer.isHdr && decoderName == null) {
+                throw Stop(CompressionStatus.UNSUPPORTED, "no decoder for this HDR stream: $trackFormat")
             }
             // Decoders tone-map on request only from API 31; the shader does it otherwise.
             val toneMapInShader = transfer.isHdr && (shaderTransfer != null || Build.VERSION.SDK_INT < Build.VERSION_CODES.S)
@@ -101,7 +116,8 @@ internal class VideoTranscoder(
             // as 19200 fps, which the encoder's rate control must not see.
             val frameRate = (listOfNotNull(sourceFrameRate, maxFrameRate).minOrNull() ?: DEFAULT_FRAME_RATE)
                 .coerceAtMost(MAX_ENCODER_FRAME_RATE)
-            val out = Scaling.videoSize(stored, request.maxShortSide, request.maxLongSide)
+            encoder = codec("H.264 encoder") { MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC) }
+            val out = outputSize(stored, videoCapabilities(encoder))
 
             val encoderFormat = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, out.width, out.height).apply {
                 setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
@@ -114,7 +130,6 @@ internal class VideoTranscoder(
                     setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_LIMITED)
                 }
             }
-            encoder = codec("H.264 encoder") { MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC) }
             codec("H.264 encoder for ${out.width}x${out.height}") {
                 encoder.configure(encoderFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
             }
@@ -145,7 +160,9 @@ internal class VideoTranscoder(
                 SurfaceFrames(OutputSurface(out.width, out.height), transfer).also { frames = it }
             }
             val sourceMime = requireNotNull(sourceFormat.mime)
-            decoder = codec("$sourceMime decoder") { MediaCodec.createDecoderByType(sourceMime) }
+            decoder = codec("$sourceMime decoder") {
+                decoderName?.let(MediaCodec::createByCodecName) ?: MediaCodec.createDecoderByType(sourceMime)
+            }
             codec("$sourceMime decoder for ${stored.width}x${stored.height}") {
                 decoder.configure(sourceFormat, surfaceFrames?.surface, null, 0)
             }
@@ -163,7 +180,7 @@ internal class VideoTranscoder(
 
             val pipeline = Pipeline(
                 videoExtractor, decoder, encoder, inputSurface, requireNotNull(frames), muxer, audio,
-                minFrameIntervalUs = maxFrameRate?.let { 1_000_000L / it } ?: 0L,
+                maxFrameRate = maxFrameRate,
                 durationUs = durationUs,
                 destination = destination,
             )
@@ -191,6 +208,21 @@ internal class VideoTranscoder(
             runCatching { muxer?.release() }
             extractors.forEach { runCatching { it.release() } }
         }
+    }
+
+    /**
+     * Stored size of the output, aligned to what [capabilities] require (usually
+     * even sides). Encoders that reject that size get multiples of 16, which every
+     * H.264 encoder takes.
+     */
+    private fun outputSize(stored: Size, capabilities: MediaCodecInfo.VideoCapabilities?): Size {
+        val aligned = Scaling.videoSize(
+            stored, request.maxShortSide, request.maxLongSide,
+            widthAlignment = capabilities?.widthAlignment ?: 2,
+            heightAlignment = capabilities?.heightAlignment ?: 2,
+        )
+        if (capabilities == null || capabilities.isSizeSupported(aligned.width, aligned.height)) return aligned
+        return Scaling.videoSize(stored, request.maxShortSide, request.maxLongSide, widthAlignment = 16, heightAlignment = 16)
     }
 
     private interface DecodedFrames {
@@ -250,7 +282,7 @@ internal class VideoTranscoder(
         private val frames: DecodedFrames,
         private val muxer: MediaMuxer,
         private val audio: List<AudioCopy>,
-        private val minFrameIntervalUs: Long,
+        maxFrameRate: Int?,
         private val durationUs: Long,
         private val destination: File,
     ) {
@@ -259,12 +291,13 @@ internal class VideoTranscoder(
         private var isDecoderDone = false
         private var isEncoderDone = false
         private var muxerVideoTrack = -1
-        private var lastRenderedUs = Long.MIN_VALUE
+        private val frameSelector = FrameSelector(maxFrameRate)
         private var lastWrittenUs = 0L
         private var writtenSamples = 0
         private var reportedPercent = -1
 
-        val hasRendered get() = lastRenderedUs != Long.MIN_VALUE
+        var hasRendered = false
+            private set
 
         fun run() {
             while (!isEncoderDone) {
@@ -296,14 +329,12 @@ internal class VideoTranscoder(
             if (index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) frames.onOutputFormat(decoder.outputFormat)
             if (index < 0) return
             val time = info.presentationTimeUs
-            // Frames closer than the frame rate cap are dropped before the encoder.
-            val shouldRender = info.size > 0 &&
-                (lastRenderedUs == Long.MIN_VALUE || time - lastRenderedUs >= minFrameIntervalUs - FRAME_TOLERANCE_US)
+            val shouldRender = info.size > 0 && frameSelector.accept(time)
             frames.render(decoder, index, shouldRender)
             if (shouldRender) {
                 inputSurface.setPresentationTime(time * 1000)
                 inputSurface.swapBuffers()
-                lastRenderedUs = time
+                hasRendered = true
             }
             if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
                 encoder.signalEndOfInputStream()
@@ -392,7 +423,6 @@ internal class VideoTranscoder(
 
     private companion object {
         const val TIMEOUT_US = 10_000L
-        const val FRAME_TOLERANCE_US = 2_000L
         const val SIZE_CHECK_SAMPLES = 30
         const val DEFAULT_AUDIO_BUFFER = 256 * 1024
         const val DEFAULT_FRAME_RATE = 30
@@ -404,6 +434,54 @@ internal class VideoTranscoder(
         } catch (error: Exception) {
             throw Stop(CompressionStatus.UNSUPPORTED, "no $what: $error")
         }
+
+        /**
+         * The format to decode and the name of a decoder that claims to support it,
+         * null when none does. Dolby Vision profile 8 carries an HEVC base layer that
+         * any HEVC decoder can play when the device has no Dolby Vision decoder.
+         */
+        fun findDecoder(trackFormat: MediaFormat): Pair<MediaFormat, String?> {
+            val name = decoderFor(trackFormat)
+            val isProfile8 = trackFormat.mime == MediaFormat.MIMETYPE_VIDEO_DOLBY_VISION &&
+                trackFormat.intOrNull(MediaFormat.KEY_PROFILE) == CodecProfileLevel.DolbyVisionProfileDvheSt
+            if (name != null || !isProfile8) return trackFormat to name
+            val baseLayer = hevcBaseLayer(trackFormat)
+            return baseLayer to decoderFor(baseLayer)
+        }
+
+        // Before API 22 the lookup fails for any format that has a frame rate.
+        private fun decoderFor(format: MediaFormat): String? = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP_MR1) {
+            null
+        } else {
+            runCatching { MediaCodecList(MediaCodecList.REGULAR_CODECS).findDecoderForFormat(format) }.getOrNull()
+        }
+
+        private fun hevcBaseLayer(format: MediaFormat): MediaFormat {
+            val width = format.getInteger(MediaFormat.KEY_WIDTH)
+            val height = format.getInteger(MediaFormat.KEY_HEIGHT)
+            return MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_HEVC, width, height).apply {
+                for (key in listOf("csd-0", "csd-1")) {
+                    if (format.containsKey(key)) setByteBuffer(key, format.getByteBuffer(key))
+                }
+                for (key in listOf(
+                    MediaFormat.KEY_MAX_INPUT_SIZE, MediaFormat.KEY_FRAME_RATE, MediaFormat.KEY_ROTATION,
+                    MediaFormat.KEY_COLOR_STANDARD, MediaFormat.KEY_COLOR_TRANSFER, MediaFormat.KEY_COLOR_RANGE,
+                )) {
+                    format.intOrNull(key)?.let { setInteger(key, it) }
+                }
+                format.longOrNull(MediaFormat.KEY_DURATION)?.let { setLong(MediaFormat.KEY_DURATION, it) }
+                setInteger(MediaFormat.KEY_PROFILE, CodecProfileLevel.HEVCProfileMain10)
+            }
+        }
+
+        fun videoCapabilities(codec: MediaCodec): MediaCodecInfo.VideoCapabilities? = runCatching {
+            val info = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                codec.codecInfo
+            } else {
+                MediaCodecList(MediaCodecList.ALL_CODECS).codecInfos.first { it.name == codec.name }
+            }
+            info.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC).videoCapabilities
+        }.getOrNull()
 
         /** Whether the stream's profile carries 10-bit samples; HDR without a known profile is assumed to. */
         fun isTenBit(format: MediaFormat): Boolean {

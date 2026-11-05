@@ -79,16 +79,35 @@ internal class OutputSurface(private val width: Int, private val height: Int) {
     private val lock = ReentrantLock()
     private val frameArrived = lock.newCondition()
     private var isFrameAvailable = false
-    private val renderer = TextureRenderer()
-    private val texture = SurfaceTexture(renderer.textureId).apply {
-        setOnFrameAvailableListener({
-            lock.withLock {
-                isFrameAvailable = true
-                frameArrived.signalAll()
+    private val renderer: TextureRenderer
+    private val texture: SurfaceTexture
+    val surface: Surface
+
+    init {
+        // A constructor that throws never returns an object to release, so a
+        // failure here has to undo what was already created.
+        var createdRenderer: TextureRenderer? = null
+        var createdTexture: SurfaceTexture? = null
+        try {
+            createdRenderer = TextureRenderer()
+            createdTexture = SurfaceTexture(createdRenderer.textureId).apply {
+                setOnFrameAvailableListener({
+                    lock.withLock {
+                        isFrameAvailable = true
+                        frameArrived.signalAll()
+                    }
+                }, Handler(thread.looper))
             }
-        }, Handler(thread.looper))
+            surface = Surface(createdTexture)
+        } catch (error: Throwable) {
+            createdTexture?.release()
+            createdRenderer?.release()
+            thread.quitSafely()
+            throw error
+        }
+        renderer = createdRenderer
+        texture = createdTexture
     }
-    val surface = Surface(texture)
 
     fun awaitNewImage() {
         lock.withLock {

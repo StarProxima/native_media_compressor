@@ -75,12 +75,17 @@ class PendingOutput {
 
   const std::wstring& path() const { return path_; }
 
+  // False when no free temporary name could be created next to the
+  // destination; the operation must not start then.
+  bool reserved() const { return reserved_; }
+
   // Moves the output over the destination. False when that fails.
   bool Commit();
 
  private:
   std::wstring destination_;
   std::wstring path_;
+  bool reserved_ = false;
   bool committed_ = false;
 };
 

@@ -98,7 +98,7 @@ void RemoveFile(const std::wstring& path) {
 
 namespace {
 
-std::wstring TemporarySibling(const std::wstring& destination) {
+std::wstring TemporarySibling(const std::wstring& destination, unsigned long long attempt) {
   static std::atomic<unsigned long> counter{0};
   const size_t separator = destination.find_last_of(L"\\/");
   const size_t name_start = separator == std::wstring::npos ? 0 : separator + 1;
@@ -107,18 +107,31 @@ std::wstring TemporarySibling(const std::wstring& destination) {
   const std::wstring stem = has_extension ? destination.substr(0, dot) : destination;
   const std::wstring extension = has_extension ? destination.substr(dot) : std::wstring();
   return stem + L".nmc-" + std::to_wstring(GetCurrentProcessId()) + L"-" +
-         std::to_wstring(++counter) + extension;
+         std::to_wstring(++counter) + L"-" + std::to_wstring(GetTickCount64() + attempt) +
+         extension;
 }
 
 }  // namespace
 
-PendingOutput::PendingOutput(const std::wstring& destination)
-    : destination_(destination), path_(TemporarySibling(destination)) {
-  RemoveFile(path_);
+// The temporary name is reserved with CREATE_NEW, so an existing file that
+// happens to have it (even the source) is never overwritten or deleted.
+PendingOutput::PendingOutput(const std::wstring& destination) : destination_(destination) {
+  for (unsigned long long attempt = 0; attempt < 16; ++attempt) {
+    std::wstring candidate = TemporarySibling(destination, attempt);
+    HANDLE file = CreateFileW(candidate.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
+                              FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file != INVALID_HANDLE_VALUE) {
+      CloseHandle(file);
+      path_ = std::move(candidate);
+      reserved_ = true;
+      return;
+    }
+    if (GetLastError() != ERROR_FILE_EXISTS) break;
+  }
 }
 
 PendingOutput::~PendingOutput() {
-  if (!committed_) RemoveFile(path_);
+  if (reserved_ && !committed_) RemoveFile(path_);
 }
 
 bool PendingOutput::Commit() {
