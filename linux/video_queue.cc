@@ -1,6 +1,7 @@
 #include "video_queue.h"
 
 #include <exception>
+#include <iterator>
 #include <utility>
 #include <vector>
 
@@ -64,17 +65,16 @@ void VideoQueue::Cancel(int64_t id) {
   std::shared_ptr<Task> removed;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (running_ && running_->id == id) {
-      running_->cancelled = true;
-      return;
-    }
-    for (auto it = pending_.begin(); it != pending_.end(); ++it) {
+    // After a hot restart the new isolate can reuse the id of a task the old
+    // one started; the newest task with the id is the one being cancelled.
+    for (auto it = pending_.rbegin(); it != pending_.rend(); ++it) {
       if ((*it)->id == id) {
         removed = *it;
-        pending_.erase(it);
+        pending_.erase(std::next(it).base());
         break;
       }
     }
+    if (!removed && running_ && running_->id == id) running_->cancelled = true;
   }
   if (removed) {
     removed->cancelled = true;
