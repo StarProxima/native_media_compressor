@@ -154,6 +154,10 @@ void main() {
             options: const VideoOptions(maxShortSide: 360),
           ).result;
 
+      // Windows decodes HEVC only with the HEVC Video Extensions installed.
+      if (!_fullCodecs && result.status == CompressionStatus.unsupported) {
+        return;
+      }
       expect(result.status, CompressionStatus.compressed, reason: '$result');
       final probe = await NativeMediaCompressor.probeVideo(destination);
       expect(probe!.videoCodec, 'video/avc');
@@ -310,7 +314,7 @@ void main() {
     });
 
     testWidgets('runs queued compressions one after another', (_) async {
-      final source = await _fixture('hevc_aac_720p.mov');
+      final source = await _fixture('h264_rotated_90.mp4');
       final tasks = [
         for (var i = 0; i < 2; i++)
           NativeMediaCompressor.compressVideo(
@@ -334,7 +338,7 @@ void main() {
 
       final result =
           await NativeMediaCompressor.compressVideo(
-            source: await _fixture('hevc_aac_720p.mov'),
+            source: await _fixture('h264_rotated_90.mp4'),
             destination: destination,
             options: const VideoOptions(maxShortSide: 240),
           ).result;
