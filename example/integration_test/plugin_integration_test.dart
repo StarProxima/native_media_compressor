@@ -222,7 +222,11 @@ void main() {
             ).result;
 
         if (_fullCodecs) {
-          expect(result.status, CompressionStatus.compressed, reason: name);
+          expect(
+            result.status,
+            CompressionStatus.compressed,
+            reason: '$name $result',
+          );
         } else {
           expect(
             result.status,
@@ -256,7 +260,11 @@ void main() {
         if (!_fullCodecs && result.status == CompressionStatus.unsupported) {
           continue;
         }
-        expect(result.status, CompressionStatus.compressed, reason: name);
+        expect(
+          result.status,
+          CompressionStatus.compressed,
+          reason: '$name $result',
+        );
         final (outShort, outLong) = _sides(result.width, result.height);
         expect(outShort, inInclusiveRange(700, 720), reason: name);
         expect(outLong / outShort, closeTo(long / short, 0.03), reason: name);
@@ -466,7 +474,11 @@ void main() {
         );
 
         if (_fullCodecs) {
-          expect(result.status, CompressionStatus.compressed, reason: name);
+          expect(
+            result.status,
+            CompressionStatus.compressed,
+            reason: '$name $result',
+          );
           expect((result.width, result.height), (800, 600), reason: name);
         } else {
           expect(

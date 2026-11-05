@@ -136,6 +136,14 @@ jobs:
           Get-WindowsFeature -Name Server-Media-Foundation -ErrorAction SilentlyContinue
       - run: flutter test integration_test -d windows --reporter expanded
         working-directory: example
+      - name: Native unit tests
+        if: always()
+        shell: pwsh
+        run: |
+          $runner = Get-ChildItem -Path example/build/windows -Recurse -Filter native_media_compressor_test.exe | Select-Object -First 1
+          if (-not $runner) { throw 'native_media_compressor_test.exe was not built' }
+          & $runner.FullName --gtest_color=no
+          if ($LASTEXITCODE -ne 0) { throw "gtest exited with $LASTEXITCODE" }
       - name: Show application crashes
         if: failure()
         shell: pwsh
