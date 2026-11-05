@@ -55,6 +55,9 @@ void PostToMain(std::function<void()> task) {
       [](gpointer data) { delete static_cast<std::function<void()>*>(data); });
 }
 
+// A few full-size decodes of large photos at once can exhaust memory.
+constexpr gint kMaxParallelImageWork = 2;
+
 void RunInBackground(std::function<void()> task) {
   static GThreadPool* pool = g_thread_pool_new(
       [](gpointer data, gpointer) {
@@ -65,7 +68,7 @@ void RunInBackground(std::function<void()> task) {
           g_warning("native_media_compressor: %s", error.what());
         }
       },
-      nullptr, static_cast<gint>(std::max(2u, g_get_num_processors())), FALSE, nullptr);
+      nullptr, kMaxParallelImageWork, FALSE, nullptr);
   g_thread_pool_push(pool, new std::function<void()>(std::move(task)), nullptr);
 }
 
