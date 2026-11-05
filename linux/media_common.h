@@ -73,6 +73,10 @@ int64_t CountGifFrames(const std::string& path);
 // Number of frames in a WebP, or -1 when the file is not a readable WebP.
 int64_t CountWebpFrames(const std::string& path);
 
+// Number of frames in a PNG (more than 1 for APNG), or -1 when the file is not
+// a readable PNG.
+int64_t CountPngFrames(const std::string& path);
+
 // Image MIME type from the file signature, or empty when unknown.
 std::string SniffImageMime(const std::string& path);
 

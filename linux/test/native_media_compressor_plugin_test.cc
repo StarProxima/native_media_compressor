@@ -192,6 +192,31 @@ TEST(CountWebpFrames, CountsAnimationFrames) {
   RemoveFile(path);
 }
 
+TEST(CountPngFrames, ReadsTheAnimationControlChunk) {
+  const auto chunk = [](std::vector<uint8_t>& png, const std::string& type,
+                        const std::vector<uint8_t>& data) {
+    const auto length = static_cast<uint32_t>(data.size());
+    png.insert(png.end(), {static_cast<uint8_t>(length >> 24), static_cast<uint8_t>(length >> 16),
+                           static_cast<uint8_t>(length >> 8), static_cast<uint8_t>(length)});
+    Append(png, type);
+    png.insert(png.end(), data.begin(), data.end());
+    png.insert(png.end(), {0, 0, 0, 0});
+  };
+  std::vector<uint8_t> png = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
+  chunk(png, "IHDR", std::vector<uint8_t>(13, 0));
+  std::vector<uint8_t> plain = png;
+  chunk(png, "acTL", {0, 0, 0, 3, 0, 0, 0, 0});
+  chunk(png, "IDAT", {0});
+  chunk(plain, "IDAT", {0});
+  chunk(plain, "acTL", {0, 0, 0, 3, 0, 0, 0, 0});
+  const std::string path = TempPath("frames.png");
+  WriteBytes(path, png);
+  EXPECT_EQ(CountPngFrames(path), 3);
+  WriteBytes(path, plain);
+  EXPECT_EQ(CountPngFrames(path), 1);
+  RemoveFile(path);
+}
+
 TEST(SniffImageMime, TellsHeicFromAvif) {
   std::vector<uint8_t> heic = {0, 0, 0, 24};
   Append(heic, "ftypmif1");

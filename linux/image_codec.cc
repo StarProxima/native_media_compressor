@@ -36,6 +36,7 @@ int64_t FrameCount(const std::string& path, const std::string& mime) {
   int64_t frames = -1;
   if (mime == "image/gif") frames = CountGifFrames(path);
   if (mime == "image/webp") frames = CountWebpFrames(path);
+  if (mime == "image/png") frames = CountPngFrames(path);
   return std::max<int64_t>(frames, 1);
 }
 

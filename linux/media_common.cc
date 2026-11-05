@@ -256,6 +256,35 @@ int64_t CountWebpFrames(const std::string& path) {
   return result;
 }
 
+int64_t CountPngFrames(const std::string& path) {
+  FILE* file = g_fopen(path.c_str(), "rb");
+  if (file == nullptr) return -1;
+  uint8_t signature[8];
+  int64_t result = -1;
+  if (fread(signature, 1, sizeof signature, file) == sizeof signature &&
+      memcmp(signature, "\x89PNG\r\n\x1a\n", 8) == 0) {
+    result = 1;
+    uint8_t chunk[8];
+    // acTL must come before the first IDAT; a later one is not an APNG.
+    while (fread(chunk, 1, sizeof chunk, file) == sizeof chunk) {
+      const uint32_t length = ByteReader(chunk, sizeof chunk, false).U32(0);
+      if (memcmp(chunk + 4, "IDAT", 4) == 0) break;
+      if (memcmp(chunk + 4, "acTL", 4) == 0 && length >= 8) {
+        uint8_t frames[4];
+        if (fread(frames, 1, sizeof frames, file) == sizeof frames) {
+          const uint32_t count = ByteReader(frames, sizeof frames, false).U32(0);
+          if (count > 0) result = count;
+        }
+        break;
+      }
+      // Chunk data plus its CRC.
+      if (fseeko(file, static_cast<off_t>(length) + 4, SEEK_CUR) != 0) break;
+    }
+  }
+  fclose(file);
+  return result;
+}
+
 std::string SniffImageMime(const std::string& path) {
   const std::vector<uint8_t> data = ReadHead(path, 64);
   const size_t size = data.size();
