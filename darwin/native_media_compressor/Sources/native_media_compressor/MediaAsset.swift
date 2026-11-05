@@ -37,6 +37,9 @@ struct MediaAsset {
     let track: AVAssetTrack
     let format: CMFormatDescription?
     let dataRate: Float
+    let isEnabled: Bool
+
+    var id: Int { Int(track.trackID) }
 
     var codec: String? { format.map { MediaAsset.audioMime(CMFormatDescriptionGetMediaSubType($0)) } }
 
@@ -52,21 +55,31 @@ struct MediaAsset {
   let duration: CMTime
   let video: VideoTrack?
   let audio: [AudioTrack]
+  /// Every sound track the container lists, including the ones AVFoundation
+  /// cannot read.
+  let containerAudio: [ContainerAudio.Track]
+  /// Track ids of each alternate group, as AVFoundation reports them.
+  let alternateGroups: [[Int]]
+
   /// Sound tracks in the container that AVFoundation cannot read.
-  let unreadableAudio: [ContainerAudio.Track]
+  var unreadableAudio: [ContainerAudio.Track] {
+    let readable = Set(audio.map(\.id))
+    return containerAudio.filter { !readable.contains($0.id) }
+  }
 
   static func load(_ asset: AVURLAsset) async throws -> MediaAsset {
-    let (duration, video, audio) = try await loadTracks(asset)
-    let readable = Set(audio.map { Int($0.track.trackID) })
-    let unreadable = ContainerAudio.soundTracks(at: asset.url).filter { !readable.contains($0.id) }
-    return MediaAsset(duration: duration, video: video, audio: audio, unreadableAudio: unreadable)
+    let (duration, video, audio, groups) = try await loadTracks(asset)
+    return MediaAsset(
+      duration: duration, video: video, audio: audio,
+      containerAudio: ContainerAudio.soundTracks(at: asset.url),
+      alternateGroups: groups.map { $0.trackIDs.map { Int(truncating: $0) } })
   }
 
   private static func loadTracks(_ asset: AVURLAsset) async throws -> (
-    CMTime, VideoTrack?, [AudioTrack]
+    CMTime, VideoTrack?, [AudioTrack], [AVAssetTrackGroup]
   ) {
     if #available(iOS 15, macOS 12, *) {
-      let duration = try await asset.load(.duration)
+      let (duration, groups) = try await asset.load(.duration, .trackGroups)
       var video: VideoTrack?
       if let track = try await asset.loadTracks(withMediaType: .video).first {
         let (size, transform, rate, formats, dataRate) = try await track.load(
@@ -78,16 +91,18 @@ struct MediaAsset {
       }
       var audio: [AudioTrack] = []
       for track in try await asset.loadTracks(withMediaType: .audio) {
-        let (formats, dataRate) = try await track.load(.formatDescriptions, .estimatedDataRate)
-        audio.append(AudioTrack(track: track, format: formats.first, dataRate: dataRate))
+        let (formats, dataRate, isEnabled) = try await track.load(
+          .formatDescriptions, .estimatedDataRate, .isEnabled)
+        audio.append(
+          AudioTrack(track: track, format: formats.first, dataRate: dataRate, isEnabled: isEnabled))
       }
-      return (duration, video, audio)
+      return (duration, video, audio, groups)
     }
 
-    try await loadValues(of: asset, keys: ["duration", "tracks"])
+    try await loadValues(of: asset, keys: ["duration", "tracks", "trackGroups"])
     let trackKeys = [
       "naturalSize", "preferredTransform", "nominalFrameRate", "formatDescriptions",
-      "estimatedDataRate",
+      "estimatedDataRate", "enabled",
     ]
     var video: VideoTrack?
     if let track = asset.tracks(withMediaType: .video).first {
@@ -101,9 +116,11 @@ struct MediaAsset {
     for track in asset.tracks(withMediaType: .audio) {
       try await loadValues(of: track, keys: trackKeys)
       audio.append(
-        AudioTrack(track: track, format: firstFormat(of: track), dataRate: track.estimatedDataRate))
+        AudioTrack(
+          track: track, format: firstFormat(of: track), dataRate: track.estimatedDataRate,
+          isEnabled: track.isEnabled))
     }
-    return (asset.duration, video, audio)
+    return (asset.duration, video, audio, asset.trackGroups)
   }
 
   static func probe(_ path: String) async -> VideoProbe? {
@@ -122,7 +139,8 @@ struct MediaAsset {
       videoCodec: video.codec,
       isHdr: video.isHDR,
       hasAudio: !media.audio.isEmpty || !media.unreadableAudio.isEmpty,
-      audioCodec: media.audio.first?.codec ?? media.unreadableAudio.first?.codec)
+      audioCodec: media.audioPlan.firstCodec ?? media.audio.first?.codec
+        ?? media.unreadableAudio.first?.codec)
   }
 
   static func displaySize(_ size: CGSize, _ transform: CGAffineTransform) -> CGSize {

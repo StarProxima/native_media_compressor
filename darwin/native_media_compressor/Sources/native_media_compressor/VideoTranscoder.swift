@@ -57,13 +57,12 @@ final class VideoTranscoder {
     if video.isHDR, !Self.canToneMap {
       return .status(.unsupported, "HDR to SDR conversion needs iOS 14 or macOS 11")
     }
-    let audioTracks = request.includeAudio ? media.audio : []
-    if let track = audioTracks.first(where: { !$0.isAAC }) {
-      return .status(.unsupported, "audio \(track.codec ?? "of unknown format") is not AAC")
+    let audioPlan = request.includeAudio ? media.audioPlan : AudioPlan()
+    if audioPlan.hasUncopyable {
+      let codec = audioPlan.uncopyableCodec ?? "of unknown format"
+      return .status(.unsupported, "audio \(codec) has no AAC alternative to copy")
     }
-    if request.includeAudio, let track = media.unreadableAudio.first {
-      return .status(.unsupported, "audio \(track.codec ?? "of unknown format") cannot be read")
-    }
+    let audioTracks = audioPlan.tracks
 
     let reader = try AVAssetReader(asset: asset)
     let writer = try AVAssetWriter(outputURL: output, fileType: .mp4)
@@ -111,7 +110,7 @@ final class VideoTranscoder {
     writer.add(videoInput)
 
     // Screen recordings with a microphone keep system sound and voice in
-    // separate tracks, so every track is copied.
+    // separate tracks that play together, so every played group is copied.
     var audioPumps: [TrackPump] = []
     for track in audioTracks {
       let output = AVAssetReaderTrackOutput(track: track.track, outputSettings: nil)

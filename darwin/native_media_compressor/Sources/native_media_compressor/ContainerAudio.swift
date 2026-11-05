@@ -9,6 +9,9 @@ enum ContainerAudio {
   struct Track {
     let id: Int
     let codec: String?
+    let isEnabled: Bool
+    /// Tracks sharing a non-zero group are alternatives; 0 means none.
+    let alternateGroup: Int
   }
 
   private static let maxMovieBoxSize: UInt64 = 64 << 20
@@ -24,14 +27,21 @@ enum ContainerAudio {
       let hdlr = children(of: mdia, type: "hdlr").first,
       hdlr.count >= 12, fourCC(hdlr, at: 8) == "soun"
     else { return nil }
-    let idOffset = header.first == 1 ? 20 : 12
-    guard header.count >= idOffset + 4 else { return nil }
-    let id = Int(uint32(header, at: idOffset))
+    // Version 1 headers widen the times before the track id and the duration
+    // before the alternate group to 64 bits.
+    let isVersion1 = header.first == 1
+    let idOffset = isVersion1 ? 20 : 12
+    let groupOffset = isVersion1 ? 46 : 34
+    guard header.count >= groupOffset + 2 else { return nil }
     let entry = children(of: mdia, type: "minf").first
       .flatMap { children(of: $0, type: "stbl").first }
       .flatMap { children(of: $0, type: "stsd").first }
       .flatMap(firstSampleEntry)
-    return Track(id: id, codec: entry.map(codec))
+    return Track(
+      id: Int(uint32(header, at: idOffset)),
+      codec: entry.map(codec),
+      isEnabled: header[header.startIndex + 3] & 0x01 != 0,
+      alternateGroup: Int(uint32(header, at: groupOffset - 2) & 0xFFFF))
   }
 
   private static func firstSampleEntry(_ stsd: Data) -> (type: String, body: Data)? {
