@@ -81,6 +81,7 @@ class PendingOutput {
  private:
   std::wstring destination_;
   std::wstring path_;
+  bool reserved_ = false;
   bool committed_ = false;
 };
 
