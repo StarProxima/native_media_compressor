@@ -472,6 +472,14 @@ Outcome Run(const VideoJob& job, const std::wstring& output,
                          "Creating the rotated video type");
     NMC_RETURN_IF_FAILED(encoder_input->SetUINT32(MF_MT_DEFAULT_STRIDE, out_width),
                          "Setting the rotated stride");
+  } else if (rotation != 0) {
+    // The video processor turned the frames itself, so they arrive upright in
+    // the shown size and the encoder takes the reader's type as it is.
+    NMC_RETURN_IF_FAILED(MFCreateMediaType(&encoder_input), "Creating the encoder input type");
+    NMC_RETURN_IF_FAILED(current_video->CopyAllItems(encoder_input.Get()),
+                         "Creating the encoder input type");
+    NMC_RETURN_IF_FAILED(encoder_input->DeleteItem(MF_MT_VIDEO_ROTATION),
+                         "Creating the encoder input type");
   }
   if (const HRESULT result = writer->SetInputMediaType(video_index, encoder_input.Get(), nullptr);
       FAILED(result)) {
