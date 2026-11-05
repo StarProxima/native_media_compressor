@@ -136,27 +136,33 @@ UINT ApngFrameCount(const std::wstring& path) {
                             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
                             OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
   if (file == INVALID_HANDLE_VALUE) return 0;
-  std::vector<unsigned char> head(1 << 20);
-  DWORD bytes_read = 0;
-  const BOOL ok =
-      ReadFile(file, head.data(), static_cast<DWORD>(head.size()), &bytes_read, nullptr);
-  CloseHandle(file);
-  if (!ok) return 0;
-  const auto read32 = [&head](size_t at) {
-    return (static_cast<uint32_t>(head[at]) << 24) | (static_cast<uint32_t>(head[at + 1]) << 16) |
-           (static_cast<uint32_t>(head[at + 2]) << 8) | static_cast<uint32_t>(head[at + 3]);
+  const auto read32 = [](const unsigned char* bytes) {
+    return (static_cast<uint32_t>(bytes[0]) << 24) | (static_cast<uint32_t>(bytes[1]) << 16) |
+           (static_cast<uint32_t>(bytes[2]) << 8) | static_cast<uint32_t>(bytes[3]);
   };
-  size_t offset = 8;
-  while (offset + 12 <= bytes_read) {
-    const uint32_t length = read32(offset);
-    const std::string type(reinterpret_cast<const char*>(head.data() + offset + 4), 4);
-    if (type == "acTL" && length >= 8 && offset + 12 <= bytes_read) {
-      return read32(offset + 8);
+  // Only chunk headers are read; the data of metadata chunks, which may be
+  // large, is skipped by moving the file pointer.
+  UINT frames = 0;
+  LARGE_INTEGER position;
+  position.QuadPart = 8;
+  while (SetFilePointerEx(file, position, nullptr, FILE_BEGIN)) {
+    unsigned char header[12] = {};
+    DWORD bytes_read = 0;
+    if (!ReadFile(file, header, static_cast<DWORD>(sizeof(header)), &bytes_read, nullptr) ||
+        bytes_read < 8) {
+      break;
     }
-    if (type == "IDAT" || type == "IEND") return 0;
-    offset += 12 + static_cast<size_t>(length);
+    const uint32_t length = read32(header);
+    const std::string type(reinterpret_cast<const char*>(header + 4), 4);
+    if (type == "acTL") {
+      if (bytes_read == sizeof(header) && length >= 8) frames = read32(header + 8);
+      break;
+    }
+    if (type == "IDAT" || type == "IEND") break;
+    position.QuadPart += 12 + static_cast<LONGLONG>(length);
   }
-  return 0;
+  CloseHandle(file);
+  return frames;
 }
 
 // Without the Store extension WIC has no decoder at all, so the decoder cannot
