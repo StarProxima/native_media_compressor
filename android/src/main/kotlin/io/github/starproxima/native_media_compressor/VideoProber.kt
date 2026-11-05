@@ -3,6 +3,7 @@ package io.github.starproxima.native_media_compressor
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
+import android.os.Build
 
 internal object VideoProber {
     fun probe(source: MediaSource): VideoProbe? {
@@ -23,6 +24,8 @@ internal object VideoProber {
                 durationMs = metadata.durationMs ?: (trackDurationUs / 1000),
                 bitrate = metadata.bitrate,
                 videoCodec = video.mime,
+                isHdr = video.mime == MediaFormat.MIMETYPE_VIDEO_DOLBY_VISION ||
+                    HdrTransfer.of(video.intOrNull(MediaFormat.KEY_COLOR_TRANSFER) ?: metadata.colorTransfer).isHdr,
                 hasAudio = audio != null,
                 audioCodec = audio?.mime,
             )
@@ -35,18 +38,27 @@ internal object VideoProber {
     fun rotation(source: MediaSource, format: MediaFormat): Int =
         format.intOrNull(MediaFormat.KEY_ROTATION)?.let(::normalizeRotation) ?: Metadata.read(source).rotation
 
+    /** Transfer function of the video track, also when only the container metadata names it. */
+    fun hdrTransfer(source: MediaSource, format: MediaFormat): HdrTransfer =
+        HdrTransfer.of(format.intOrNull(MediaFormat.KEY_COLOR_TRANSFER) ?: Metadata.read(source).colorTransfer)
+
     private fun normalizeRotation(degrees: Int) = (degrees % 360 + 360) % 360
 
-    private class Metadata(val rotation: Int, val durationMs: Long?, val bitrate: Long?) {
+    private class Metadata(val rotation: Int, val durationMs: Long?, val bitrate: Long?, val colorTransfer: Int?) {
         companion object {
             fun read(source: MediaSource): Metadata {
-                val retriever = runCatching { source.openRetriever() }.getOrNull() ?: return Metadata(0, null, null)
+                val retriever = runCatching { source.openRetriever() }.getOrNull() ?: return Metadata(0, null, null, null)
                 try {
                     fun value(key: Int) = retriever.extractMetadata(key)?.toLongOrNull()
                     return Metadata(
                         rotation = value(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toInt()?.let(::normalizeRotation) ?: 0,
                         durationMs = value(MediaMetadataRetriever.METADATA_KEY_DURATION)?.takeIf { it > 0 },
                         bitrate = value(MediaMetadataRetriever.METADATA_KEY_BITRATE)?.takeIf { it > 0 },
+                        colorTransfer = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                            value(MediaMetadataRetriever.METADATA_KEY_COLOR_TRANSFER)?.toInt()
+                        } else {
+                            null
+                        },
                     )
                 } finally {
                     runCatching { retriever.release() }

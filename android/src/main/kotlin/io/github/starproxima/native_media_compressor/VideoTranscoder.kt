@@ -2,17 +2,19 @@ package io.github.starproxima.native_media_compressor
 
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
+import android.media.MediaCodecInfo.CodecProfileLevel
+import android.media.MediaCodecList
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMuxer
 import android.os.Build
 import java.io.File
 import java.nio.ByteBuffer
-import kotlin.math.min
 
 /**
- * Re-encodes a video to H.264: the decoder renders each frame onto an EGL surface,
- * which scales it onto the encoder's input surface. AAC tracks are copied as is.
+ * Re-encodes a video to H.264: decoded frames are drawn onto the encoder's input
+ * surface through EGL, which scales them and, for HDR input, tone-maps them to SDR.
+ * AAC tracks are copied as is.
  */
 internal class VideoTranscoder(
     private val source: MediaSource,
@@ -22,6 +24,9 @@ internal class VideoTranscoder(
 ) {
     private class Stop(val status: CompressionStatus, message: String? = null) : Exception(message)
 
+    /** The decoder cannot hand over SDR frames on a surface; start again with [ToneMappedFrames]. */
+    private class ToneMapInShader(val transfer: HdrTransfer) : Exception()
+
     private val maxBytes = request.maxBytes?.takeIf { it > 0 } ?: Long.MAX_VALUE
 
     fun run(): CompressionReply {
@@ -29,7 +34,11 @@ internal class VideoTranscoder(
         destination.delete()
         var reply = CompressionReply(CompressionStatus.FAILED)
         try {
-            val size = transcode(destination)
+            val size = try {
+                transcode(destination, shaderTransfer = null)
+            } catch (restart: ToneMapInShader) {
+                transcode(destination, restart.transfer)
+            }
             reply = CompressionReply(
                 CompressionStatus.COMPRESSED,
                 width = size.width.toLong(),
@@ -48,21 +57,34 @@ internal class VideoTranscoder(
         return reply
     }
 
-    /** Returns the displayed size of the output. */
-    private fun transcode(destination: File): Size {
+    /**
+     * Returns the displayed size of the output. With [shaderTransfer] set, frames are
+     * decoded into buffers and tone-mapped from that transfer function in the shader.
+     */
+    private fun transcode(destination: File, shaderTransfer: HdrTransfer?): Size {
         if (isCancelled()) throw Stop(CompressionStatus.CANCELLED)
         val extractors = mutableListOf<MediaExtractor>()
         var decoder: MediaCodec? = null
         var encoder: MediaCodec? = null
         var inputSurface: InputSurface? = null
-        var outputSurface: OutputSurface? = null
+        var frames: DecodedFrames? = null
         var muxer: MediaMuxer? = null
         try {
             val videoExtractor = source.openExtractor().also(extractors::add)
             val videoTrack = videoExtractor.tracks("video/").firstOrNull()
                 ?: throw Stop(CompressionStatus.UNSUPPORTED, "no video track")
             val sourceFormat = videoExtractor.getTrackFormat(videoTrack)
-            if (isHdr(sourceFormat)) throw Stop(CompressionStatus.UNSUPPORTED, "HDR video")
+            val transfer = shaderTransfer ?: VideoProber.hdrTransfer(source, sourceFormat)
+            if (transfer.isHdr && Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
+                throw Stop(CompressionStatus.UNSUPPORTED, "HDR video needs API 24")
+            }
+            // HDR streams are mostly 10-bit, which many decoders lack (the profile tells).
+            if (transfer.isHdr && MediaCodecList(MediaCodecList.REGULAR_CODECS).findDecoderForFormat(sourceFormat) == null) {
+                throw Stop(CompressionStatus.UNSUPPORTED, "no decoder for this HDR stream: $sourceFormat")
+            }
+            // Decoders tone-map on request only from API 31; the shader does it otherwise.
+            val toneMapInShader = transfer.isHdr && (shaderTransfer != null || Build.VERSION.SDK_INT < Build.VERSION_CODES.S)
+            // Only audio tracks matter: screen recordings also carry data tracks without a codec.
             val audioTracks = if (request.includeAudio) videoExtractor.tracks("audio/") else emptyList()
             val audioFormats = audioTracks.map(videoExtractor::getTrackFormat)
             audioFormats.firstOrNull { it.mime != MediaFormat.MIMETYPE_AUDIO_AAC }?.let {
@@ -75,7 +97,10 @@ internal class VideoTranscoder(
             val durationUs = sourceFormat.longOrNull(MediaFormat.KEY_DURATION) ?: 0L
             val sourceFrameRate = sourceFormat.intOrNull(MediaFormat.KEY_FRAME_RATE)?.takeIf { it > 0 }
             val maxFrameRate = request.maxFrameRate?.toInt()?.takeIf { it > 0 }
-            val frameRate = listOfNotNull(sourceFrameRate, maxFrameRate).minOrNull() ?: DEFAULT_FRAME_RATE
+            // Variable frame rate recordings report the timescale as their rate, such
+            // as 19200 fps, which the encoder's rate control must not see.
+            val frameRate = (listOfNotNull(sourceFrameRate, maxFrameRate).minOrNull() ?: DEFAULT_FRAME_RATE)
+                .coerceAtMost(MAX_ENCODER_FRAME_RATE)
             val out = Scaling.videoSize(stored, request.maxShortSide, request.maxLongSide)
 
             val encoderFormat = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, out.width, out.height).apply {
@@ -83,6 +108,11 @@ internal class VideoTranscoder(
                 setInteger(MediaFormat.KEY_BIT_RATE, request.videoBitrate.coerceIn(1, Int.MAX_VALUE.toLong()).toInt())
                 setInteger(MediaFormat.KEY_FRAME_RATE, frameRate)
                 setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                    setInteger(MediaFormat.KEY_COLOR_STANDARD, MediaFormat.COLOR_STANDARD_BT709)
+                    setInteger(MediaFormat.KEY_COLOR_TRANSFER, MediaFormat.COLOR_TRANSFER_SDR_VIDEO)
+                    setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_LIMITED)
+                }
             }
             encoder = codec("H.264 encoder") { MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC) }
             codec("H.264 encoder for ${out.width}x${out.height}") {
@@ -91,15 +121,33 @@ internal class VideoTranscoder(
             inputSurface = InputSurface(encoder.createInputSurface())
             inputSurface.makeCurrent()
             encoder.start()
-            outputSurface = OutputSurface(out.width, out.height)
 
             // The rotation goes to the output metadata: with it set, the decoder would
             // rotate the frame on the surface and swap width and height.
             sourceFormat.setInteger(MediaFormat.KEY_ROTATION, 0)
+            val surfaceFrames = if (toneMapInShader) {
+                // Without an explicit P010 request some decoders cut 10-bit output to 8 bits,
+                // while 8-bit decoders reject P010.
+                sourceFormat.setInteger(
+                    MediaFormat.KEY_COLOR_FORMAT,
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && isTenBit(sourceFormat)) {
+                        MediaCodecInfo.CodecCapabilities.COLOR_FormatYUVP010
+                    } else {
+                        MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible
+                    },
+                )
+                frames = BufferFrames(ToneMappedFrames(out.width, out.height, transfer))
+                null
+            } else {
+                if (transfer.isHdr) {
+                    sourceFormat.setInteger(MediaFormat.KEY_COLOR_TRANSFER_REQUEST, MediaFormat.COLOR_TRANSFER_SDR_VIDEO)
+                }
+                SurfaceFrames(OutputSurface(out.width, out.height), transfer).also { frames = it }
+            }
             val sourceMime = requireNotNull(sourceFormat.mime)
             decoder = codec("$sourceMime decoder") { MediaCodec.createDecoderByType(sourceMime) }
             codec("$sourceMime decoder for ${stored.width}x${stored.height}") {
-                decoder.configure(sourceFormat, outputSurface.surface, null, 0)
+                decoder.configure(sourceFormat, surfaceFrames?.surface, null, 0)
             }
             decoder.start()
 
@@ -113,12 +161,23 @@ internal class VideoTranscoder(
                 AudioCopy(extractor, muxer.addTrack(format), format.intOrNull(MediaFormat.KEY_MAX_INPUT_SIZE))
             }
 
-            Pipeline(
-                videoExtractor, decoder, encoder, inputSurface, outputSurface, muxer, audio,
+            val pipeline = Pipeline(
+                videoExtractor, decoder, encoder, inputSurface, requireNotNull(frames), muxer, audio,
                 minFrameIntervalUs = maxFrameRate?.let { 1_000_000L / it } ?: 0L,
                 durationUs = durationUs,
                 destination = destination,
-            ).run()
+            )
+            try {
+                pipeline.run()
+            } catch (error: Exception) {
+                // Some decoders accept 10-bit input but fail as soon as they have to
+                // put a 10-bit frame on a surface.
+                if (transfer.isHdr && !pipeline.hasRendered && error !is Stop && error !is ToneMapInShader) {
+                    if (!toneMapInShader) throw ToneMapInShader(transfer)
+                    throw Stop(CompressionStatus.UNSUPPORTED, "the decoder cannot decode this HDR stream: $error")
+                }
+                throw error
+            }
             muxer.stop()
             if (destination.length() > maxBytes) throw Stop(CompressionStatus.TOO_LARGE)
             return if (rotation % 180 != 0) out.transposed() else out
@@ -127,11 +186,60 @@ internal class VideoTranscoder(
             runCatching { decoder?.release() }
             runCatching { encoder?.stop() }
             runCatching { encoder?.release() }
-            runCatching { outputSurface?.release() }
+            runCatching { frames?.release() }
             runCatching { inputSurface?.release() }
             runCatching { muxer?.release() }
             extractors.forEach { runCatching { it.release() } }
         }
+    }
+
+    private interface DecodedFrames {
+        fun onOutputFormat(format: MediaFormat)
+
+        /** Draws output buffer [index] when [draw] is set and returns the buffer to the decoder either way. */
+        fun render(decoder: MediaCodec, index: Int, draw: Boolean)
+
+        fun release()
+    }
+
+    private class SurfaceFrames(private val output: OutputSurface, private val sourceTransfer: HdrTransfer) : DecodedFrames {
+        val surface get() = output.surface
+
+        // The decoder reports the transfer it really outputs before the first frame:
+        // HDR frames on a surface cannot be tone-mapped, whatever the container said.
+        override fun onOutputFormat(format: MediaFormat) {
+            val reported = format.intOrNull(MediaFormat.KEY_COLOR_TRANSFER)
+            val isSdr = reported == MediaFormat.COLOR_TRANSFER_SDR_VIDEO
+            if (sourceTransfer.isHdr && !isSdr) throw ToneMapInShader(sourceTransfer)
+            if (HdrTransfer.of(reported).isHdr) throw ToneMapInShader(HdrTransfer.of(reported))
+        }
+
+        override fun render(decoder: MediaCodec, index: Int, draw: Boolean) {
+            decoder.releaseOutputBuffer(index, draw)
+            if (draw) {
+                output.awaitNewImage()
+                output.drawImage()
+            }
+        }
+
+        override fun release() = output.release()
+    }
+
+    private class BufferFrames(private val toneMapped: ToneMappedFrames) : DecodedFrames {
+        override fun onOutputFormat(format: MediaFormat) = toneMapped.onOutputFormat(format)
+
+        override fun render(decoder: MediaCodec, index: Int, draw: Boolean) {
+            try {
+                if (draw) {
+                    val image = decoder.getOutputImage(index) ?: error("decoder gave no image")
+                    image.use(toneMapped::draw)
+                }
+            } finally {
+                decoder.releaseOutputBuffer(index, false)
+            }
+        }
+
+        override fun release() = toneMapped.release()
     }
 
     private inner class Pipeline(
@@ -139,7 +247,7 @@ internal class VideoTranscoder(
         private val decoder: MediaCodec,
         private val encoder: MediaCodec,
         private val inputSurface: InputSurface,
-        private val outputSurface: OutputSurface,
+        private val frames: DecodedFrames,
         private val muxer: MediaMuxer,
         private val audio: List<AudioCopy>,
         private val minFrameIntervalUs: Long,
@@ -155,6 +263,8 @@ internal class VideoTranscoder(
         private var lastWrittenUs = 0L
         private var writtenSamples = 0
         private var reportedPercent = -1
+
+        val hasRendered get() = lastRenderedUs != Long.MIN_VALUE
 
         fun run() {
             while (!isEncoderDone) {
@@ -183,20 +293,14 @@ internal class VideoTranscoder(
 
         private fun renderDecoded() {
             val index = decoder.dequeueOutputBuffer(info, TIMEOUT_US)
-            // Container metadata does not always tell HDR apart, but the decoder
-            // reports the real color transfer before the first frame.
-            if (index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED && isHdr(decoder.outputFormat)) {
-                throw Stop(CompressionStatus.UNSUPPORTED, "HDR video")
-            }
+            if (index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) frames.onOutputFormat(decoder.outputFormat)
             if (index < 0) return
             val time = info.presentationTimeUs
             // Frames closer than the frame rate cap are dropped before the encoder.
             val shouldRender = info.size > 0 &&
                 (lastRenderedUs == Long.MIN_VALUE || time - lastRenderedUs >= minFrameIntervalUs - FRAME_TOLERANCE_US)
-            decoder.releaseOutputBuffer(index, shouldRender)
+            frames.render(decoder, index, shouldRender)
             if (shouldRender) {
-                outputSurface.awaitNewImage()
-                outputSurface.drawImage()
                 inputSurface.setPresentationTime(time * 1000)
                 inputSurface.swapBuffers()
                 lastRenderedUs = time
@@ -292,6 +396,7 @@ internal class VideoTranscoder(
         const val SIZE_CHECK_SAMPLES = 30
         const val DEFAULT_AUDIO_BUFFER = 256 * 1024
         const val DEFAULT_FRAME_RATE = 30
+        const val MAX_ENCODER_FRAME_RATE = 240
 
         // A missing codec or one that rejects this format is a platform limit, not a broken input.
         private inline fun <T> codec(what: String, block: () -> T): T = try {
@@ -300,9 +405,31 @@ internal class VideoTranscoder(
             throw Stop(CompressionStatus.UNSUPPORTED, "no $what: $error")
         }
 
-        fun isHdr(format: MediaFormat): Boolean = when (format.intOrNull(MediaFormat.KEY_COLOR_TRANSFER)) {
-            MediaFormat.COLOR_TRANSFER_ST2084, MediaFormat.COLOR_TRANSFER_HLG -> true
-            else -> false
+        /** Whether the stream's profile carries 10-bit samples; HDR without a known profile is assumed to. */
+        fun isTenBit(format: MediaFormat): Boolean {
+            val profile = format.intOrNull(MediaFormat.KEY_PROFILE) ?: return true
+            return when (format.mime) {
+                MediaFormat.MIMETYPE_VIDEO_AVC -> profile == CodecProfileLevel.AVCProfileHigh10
+                MediaFormat.MIMETYPE_VIDEO_HEVC -> profile in setOf(
+                    CodecProfileLevel.HEVCProfileMain10,
+                    CodecProfileLevel.HEVCProfileMain10HDR10,
+                    CodecProfileLevel.HEVCProfileMain10HDR10Plus,
+                )
+                MediaFormat.MIMETYPE_VIDEO_VP9 -> profile in setOf(
+                    CodecProfileLevel.VP9Profile2,
+                    CodecProfileLevel.VP9Profile3,
+                    CodecProfileLevel.VP9Profile2HDR,
+                    CodecProfileLevel.VP9Profile3HDR,
+                    CodecProfileLevel.VP9Profile2HDR10Plus,
+                    CodecProfileLevel.VP9Profile3HDR10Plus,
+                )
+                MediaFormat.MIMETYPE_VIDEO_AV1 -> profile in setOf(
+                    CodecProfileLevel.AV1ProfileMain10,
+                    CodecProfileLevel.AV1ProfileMain10HDR10,
+                    CodecProfileLevel.AV1ProfileMain10HDR10Plus,
+                )
+                else -> true
+            }
         }
 
         // The media server takes codecs back from apps in the background.

@@ -127,7 +127,7 @@ private class TextureRenderer {
         .order(ByteOrder.nativeOrder()).asFloatBuffer().apply { put(QUAD).position(0) }
 
     init {
-        program = createProgram()
+        program = GlProgram.create(VERTEX_SHADER, FRAGMENT_SHADER)
         positionHandle = GLES20.glGetAttribLocation(program, "aPosition")
         texCoordHandle = GLES20.glGetAttribLocation(program, "aTexCoord")
         matrixHandle = GLES20.glGetUniformLocation(program, "uTexMatrix")
@@ -194,26 +194,28 @@ private class TextureRenderer {
                 gl_FragColor = texture2D(sTexture, vTexCoord);
             }
         """
+    }
+}
 
-        fun createProgram(): Int {
-            val program = GLES20.glCreateProgram()
-            GLES20.glAttachShader(program, compile(GLES20.GL_VERTEX_SHADER, VERTEX_SHADER))
-            GLES20.glAttachShader(program, compile(GLES20.GL_FRAGMENT_SHADER, FRAGMENT_SHADER))
-            GLES20.glLinkProgram(program)
-            val status = IntArray(1)
-            GLES20.glGetProgramiv(program, GLES20.GL_LINK_STATUS, status, 0)
-            check(status[0] == GLES20.GL_TRUE) { "GL link failed: ${GLES20.glGetProgramInfoLog(program)}" }
-            return program
-        }
+internal object GlProgram {
+    fun create(vertexShader: String, fragmentShader: String): Int {
+        val program = GLES20.glCreateProgram()
+        GLES20.glAttachShader(program, compile(GLES20.GL_VERTEX_SHADER, vertexShader))
+        GLES20.glAttachShader(program, compile(GLES20.GL_FRAGMENT_SHADER, fragmentShader))
+        GLES20.glLinkProgram(program)
+        val status = IntArray(1)
+        GLES20.glGetProgramiv(program, GLES20.GL_LINK_STATUS, status, 0)
+        check(status[0] == GLES20.GL_TRUE) { "GL link failed: ${GLES20.glGetProgramInfoLog(program)}" }
+        return program
+    }
 
-        fun compile(type: Int, source: String): Int {
-            val shader = GLES20.glCreateShader(type)
-            GLES20.glShaderSource(shader, source.trimIndent())
-            GLES20.glCompileShader(shader)
-            val status = IntArray(1)
-            GLES20.glGetShaderiv(shader, GLES20.GL_COMPILE_STATUS, status, 0)
-            check(status[0] == GLES20.GL_TRUE) { "GL compile failed: ${GLES20.glGetShaderInfoLog(shader)}" }
-            return shader
-        }
+    private fun compile(type: Int, source: String): Int {
+        val shader = GLES20.glCreateShader(type)
+        GLES20.glShaderSource(shader, source.trimIndent())
+        GLES20.glCompileShader(shader)
+        val status = IntArray(1)
+        GLES20.glGetShaderiv(shader, GLES20.GL_COMPILE_STATUS, status, 0)
+        check(status[0] == GLES20.GL_TRUE) { "GL compile failed: ${GLES20.glGetShaderInfoLog(shader)}" }
+        return shader
     }
 }
