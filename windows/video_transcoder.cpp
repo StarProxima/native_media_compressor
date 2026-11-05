@@ -707,7 +707,12 @@ Outcome TranscodeVideo(const VideoJob& job, const std::atomic<bool>& cancelled,
                          DescribeHresult("Replacing the destination",
                                          HRESULT_FROM_WIN32(GetLastError())));
     }
-    on_progress(1.0);
+    // The destination is already replaced, so a failed progress delivery must
+    // not turn the result into a failure.
+    try {
+      on_progress(1.0);
+    } catch (...) {
+    }
     return outcome;
   } catch (...) {
     return Outcome::Of(Status::kFailed, kUnexpectedError);
