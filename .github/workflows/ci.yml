@@ -151,6 +151,43 @@ jobs:
           Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'Application Error', 'Windows Error Reporting' } -MaxEvents 10 -ErrorAction SilentlyContinue |
             Format-List TimeCreated, Message
 
+  linux:
+    name: Linux integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install GTK and GStreamer
+        run: |
+          sudo apt-get update
+          # gstreamer1.0-libav provides the H.264 and HEVC decoders on Ubuntu.
+          sudo apt-get install -y --no-install-recommends \
+            clang cmake ninja-build pkg-config libgtk-3-dev xvfb \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-tools \
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav
+          for loader in webp-pixbuf-loader heif-gdk-pixbuf libheif-plugin-libde265; do
+            sudo apt-get install -y --no-install-recommends "$loader" || echo "$loader is not available"
+          done
+      - name: Show available codecs
+        run: |
+          for element in x264enc openh264enc avdec_h264 avdec_h265 h264parse h265parse mp4mux aacparse; do
+            gst-inspect-1.0 --exists "$element" && echo "$element: yes" || echo "$element: no"
+          done
+          ls /usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders || true
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - run: xvfb-run -a flutter test integration_test -d linux --reporter expanded
+        working-directory: example
+      - name: Native unit tests
+        if: always()
+        run: |
+          runner=$(find example/build/linux -type f -name native_media_compressor_test | head -n 1)
+          if [ -z "$runner" ]; then echo "native_media_compressor_test was not built"; exit 1; fi
+          "$runner" --gtest_color=no
+
   web:
     name: Web integration tests
     runs-on: ubuntu-latest
