@@ -7,8 +7,9 @@ Compress images and videos in Flutter with the codecs the platform already ships
 | Android 5.0+ | MediaCodec, H.264 | ImageDecoder / BitmapFactory | MediaExtractor, image headers |
 | iOS 13+, macOS 10.15+ | AVFoundation, H.264 | ImageIO | AVFoundation, ImageIO |
 | Windows 10+ | Media Foundation, H.264 | WIC | Media Foundation, WIC |
+| Web: Chrome and Edge 94+, Safari 16.4+, Firefox 130+ | WebCodecs, H.264 | `createImageBitmap`, `OffscreenCanvas` | MP4 and image headers |
 
-Linux and web support are in progress.
+Linux support is in progress.
 
 ## Usage
 
@@ -68,6 +69,7 @@ Every status except `compressed` leaves `destination` as it was: the output is w
 
 - **iOS and macOS:** works with both Swift Package Manager and CocoaPods. HDR conversion needs iOS 14 or macOS 11.
 - **Android:** `source` may be a `content://` URI. HEIC decoding needs Android 9 or newer.
+- **Web:** `source` is a `blob:`, `data:` or same-origin (or CORS-enabled) `http(s):` URL. `destination` is ignored: `result.path` is a new object URL of the output, which you release with `URL.revokeObjectURL` when done. Video input must be MP4 or QuickTime (fragmented MP4 is `unsupported`), and which input codecs decode depends on the browser; without WebCodecs video calls return `unsupported`. HDR is converted to SDR by the browser's colour conversion as frames are drawn. HEIC images are `unsupported` outside Safari.
 - **Windows:** HDR video is `unsupported` for now. Video needs Media Foundation, which Windows N editions only have with the Media Feature Pack; without it video calls return `unsupported` and the app still starts. HEVC video, HEIC and WebP need the matching codec extensions from the Microsoft Store; without them those inputs are `unsupported`.
 
 ## License

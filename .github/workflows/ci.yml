@@ -188,6 +188,30 @@ jobs:
           if [ -z "$runner" ]; then echo "native_media_compressor_test was not built"; exit 1; fi
           "$runner" --gtest_color=no
 
+  web:
+    name: Web integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - run: flutter pub get
+        working-directory: example
+      - name: Start ChromeDriver
+        run: |
+          google-chrome --version
+          "$CHROMEWEBDRIVER/chromedriver" --port=4444 &
+      - name: Run in Chrome
+        run: >-
+          flutter drive --profile --headless
+          -d web-server --browser-name=chrome
+          --driver=test_driver/integration_test.dart
+          --target=integration_test/plugin_integration_test.dart
+        working-directory: example
+
   minimum:
     name: Build with Flutter 3.29 and AGP 8
     runs-on: ubuntu-latest
