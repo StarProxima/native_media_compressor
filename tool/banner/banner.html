@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>native_media_compressor banner</title>
+<style>
+  :root {
+    --bg: #0c0f16;
+    --panel: #141925;
+    --line: #232a3a;
+    --text: #e8ecf4;
+    --muted: #8a93a8;
+    --accent: #5ee6b0;
+    --accent-2: #6aa8ff;
+    --before: #3a4256;
+    --mono: "SF Mono", ui-monospace, Menlo, monospace;
+    --sans: -apple-system, "SF Pro Display", "Helvetica Neue", Arial, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1280px; height: 600px; background: var(--bg); overflow: hidden; }
+  body {
+    font-family: var(--sans);
+    color: var(--text);
+    position: relative;
+    background:
+      radial-gradient(700px 420px at 88% 18%, rgba(106, 168, 255, 0.13), transparent 70%),
+      radial-gradient(600px 400px at 8% 100%, rgba(94, 230, 176, 0.10), transparent 70%),
+      var(--bg);
+  }
+  body::before {
+    content: "";
+    position: absolute; inset: 0;
+    background-image:
+      linear-gradient(var(--line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--line) 1px, transparent 1px);
+    background-size: 40px 40px;
+    opacity: 0.35;
+    mask-image: radial-gradient(ellipse at 50% 40%, black 30%, transparent 80%);
+  }
+  .wrap {
+    position: relative;
+    display: grid;
+    grid-template-columns: 1fr 520px;
+    gap: 56px;
+    padding: 72px 72px 0;
+    height: 100%;
+  }
+  .badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    font: 500 15px var(--mono);
+    color: var(--accent);
+    border: 1px solid rgba(94, 230, 176, 0.35);
+    background: rgba(94, 230, 176, 0.07);
+    border-radius: 999px;
+    padding: 6px 14px;
+  }
+  .badge i { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+  h1 {
+    margin-top: 26px;
+    font: 700 50px/1.05 var(--mono);
+    letter-spacing: -1.5px;
+  }
+  h1 span { color: var(--muted); font-weight: 500; }
+  .tagline {
+    margin-top: 20px;
+    font-size: 24px; line-height: 1.4;
+    color: #c4cad8;
+    max-width: 560px;
+  }
+  .tagline b { color: var(--text); font-weight: 600; }
+  .platforms {
+    margin-top: 40px;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    max-width: 610px;
+    gap: 10px 10px;
+  }
+  .chip {
+    display: flex; align-items: baseline; gap: 10px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 9px 14px;
+    font-size: 16px; font-weight: 600;
+  }
+  .chip small { font: 400 13px var(--mono); color: var(--muted); }
+
+  .cards { display: flex; flex-direction: column; gap: 20px; padding-top: 8px; }
+  .card {
+    background: linear-gradient(180deg, #171d2b, #121723);
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    padding: 22px 24px 24px;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+  }
+  .file { display: flex; align-items: center; gap: 14px; }
+  .icon {
+    width: 42px; height: 42px; border-radius: 10px;
+    display: grid; place-items: center;
+    font: 700 12px var(--mono);
+  }
+  .icon.video { background: rgba(106, 168, 255, 0.14); color: var(--accent-2); }
+  .icon.photo { background: rgba(94, 230, 176, 0.14); color: var(--accent); }
+  .name { font: 600 17px var(--mono); }
+  .meta { margin-top: 3px; font: 400 13px var(--mono); color: var(--muted); }
+  .bars { margin-top: 18px; display: grid; gap: 9px; }
+  .row { display: grid; grid-template-columns: 1fr 86px; align-items: center; gap: 14px; }
+  .bar { height: 10px; border-radius: 5px; background: var(--before); }
+  .bar.after { background: linear-gradient(90deg, var(--accent), #8ff0c8); }
+  .card.v .bar.after { background: linear-gradient(90deg, var(--accent-2), #9cc6ff); }
+  .size { font: 600 15px var(--mono); text-align: right; color: var(--muted); }
+  .size.after { color: var(--text); }
+  .result {
+    margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--line);
+    display: flex; justify-content: space-between;
+    font: 500 13px var(--mono); color: var(--muted);
+  }
+  .result b { color: var(--accent); font-weight: 600; }
+  .card.v .result b { color: var(--accent-2); }
+
+  .foot {
+    position: absolute; left: 72px; bottom: 44px;
+    display: flex; gap: 28px;
+    font: 500 15px var(--mono); color: var(--muted);
+  }
+  .foot span::before { content: "✓"; color: var(--accent); margin-right: 8px; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div>
+      <div class="badge"><i></i>Flutter plugin</div>
+      <h1>native_media<span>_</span><br>compressor</h1>
+      <p class="tagline">Compress images and video with <b>the codecs the platform already ships</b>.</p>
+      <div class="platforms">
+        <div class="chip">Android <small>MediaCodec</small></div>
+        <div class="chip">iOS <small>AVFoundation</small></div>
+        <div class="chip">macOS <small>AVFoundation</small></div>
+        <div class="chip">Windows <small>Media Foundation</small></div>
+        <div class="chip">Linux <small>GStreamer</small></div>
+        <div class="chip">Web <small>WebCodecs</small></div>
+      </div>
+    </div>
+    <div class="cards">
+      <div class="card v">
+        <div class="file">
+          <div class="icon video">MOV</div>
+          <div>
+            <div class="name">camera_clip.mov</div>
+            <div class="meta">HEVC · recorded on a phone</div>
+          </div>
+        </div>
+        <div class="bars">
+          <div class="row"><div class="bar"></div><div class="size">153 MB</div></div>
+          <div class="row"><div class="bar after" style="width: 12.4%"></div><div class="size after">19 MB</div></div>
+        </div>
+        <div class="result"><span>H.264 · 720p · 30 fps · MP4</span><b>−88%</b></div>
+      </div>
+      <div class="card">
+        <div class="file">
+          <div class="icon photo">HEIC</div>
+          <div>
+            <div class="name">IMG_0412.heic</div>
+            <div class="meta">12 MP · 4032×3024</div>
+          </div>
+        </div>
+        <div class="bars">
+          <div class="row"><div class="bar"></div><div class="size">2.8 MB</div></div>
+          <div class="row"><div class="bar after" style="width: 23.9%"></div><div class="size after">684 KB</div></div>
+        </div>
+        <div class="result"><span>JPEG · 2048×1536 · q85</span><b>−76%</b></div>
+      </div>
+    </div>
+  </div>
+  <div class="foot">
+    <span>no ffmpeg</span>
+    <span>no bundled encoders</span>
+    <span>results, not exceptions</span>
+  </div>
+</body>
+</html>
