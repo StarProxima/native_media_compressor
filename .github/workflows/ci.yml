@@ -94,9 +94,11 @@ jobs:
         working-directory: example
       - name: Native unit tests
         if: always()
-        run: >-
-          xcodebuild test -quiet -workspace ios/Runner.xcworkspace -scheme Runner
-          -only-testing:RunnerTests -destination id=${{ steps.simulator.outputs.udid }}
+        run: |
+          # flutter test leaves the project pointing at its own, deleted entry point.
+          flutter build ios --simulator --debug --config-only
+          xcodebuild test -quiet -workspace ios/Runner.xcworkspace -scheme Runner \
+            -only-testing:RunnerTests -destination id=${{ steps.simulator.outputs.udid }}
         working-directory: example
 
   cocoapods:
@@ -130,9 +132,11 @@ jobs:
         working-directory: example
       - name: Native unit tests
         if: always()
-        run: >-
-          xcodebuild test -quiet -workspace macos/Runner.xcworkspace -scheme Runner
-          -only-testing:RunnerTests -destination platform=macOS
+        run: |
+          # flutter test leaves the project pointing at its own, deleted entry point.
+          flutter build macos --debug --config-only
+          xcodebuild test -quiet -workspace macos/Runner.xcworkspace -scheme Runner \
+            -only-testing:RunnerTests -destination platform=macOS
         working-directory: example
 
   windows:
