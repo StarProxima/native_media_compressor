@@ -30,6 +30,7 @@ jobs:
       - name: Generated bindings match the schema
         run: |
           dart run pigeon --input pigeons/messages.dart
+          dart format lib/src/messages.g.dart
           git diff --exit-code
       - run: dart pub publish --dry-run
 

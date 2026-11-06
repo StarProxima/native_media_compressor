@@ -40,7 +40,7 @@
 ## Устройство
 
 - `lib/` - публичный Dart API (`NativeMediaCompressor`), платформенный интерфейс и web-реализация.
-- `pigeons/messages.dart` - схема канала к нативу; сгенерированные `*.g.*` не правятся руками, перегенерация: `dart run pigeon --input pigeons/messages.dart`.
+- `pigeons/messages.dart` - схема канала к нативу; сгенерированные `*.g.*` не правятся руками, перегенерация: `dart run pigeon --input pigeons/messages.dart && dart format lib/src/messages.g.dart` (pub.dev снижает оценку за неотформатированный Dart).
 - `android/` (Kotlin), `darwin/` (Swift, общий для iOS и macOS), `windows/` (C++), `linux/` (C++ на GObject) - нативные реализации.
 - `example/` - пример и integration-тесты (`example/integration_test/`) на реальных образцах из `example/integration_test/fixtures/`.
 
