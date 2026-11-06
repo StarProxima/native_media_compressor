@@ -54,6 +54,11 @@ jobs:
           cache: true
       - run: flutter pub get
         working-directory: example
+      - name: Kotlin unit tests
+        run: |
+          flutter build apk --config-only
+          cd android && ./gradlew :native_media_compressor:testDebugUnitTest
+        working-directory: example
       - uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34
@@ -87,6 +92,12 @@ jobs:
           echo "udid=$udid" >> "$GITHUB_OUTPUT"
       - run: flutter test integration_test -d ${{ steps.simulator.outputs.udid }} --reporter expanded
         working-directory: example
+      - name: Native unit tests
+        if: always()
+        run: >-
+          xcodebuild test -quiet -workspace ios/Runner.xcworkspace -scheme Runner
+          -only-testing:RunnerTests -destination id=${{ steps.simulator.outputs.udid }}
+        working-directory: example
 
   cocoapods:
     name: Build iOS and macOS with CocoaPods
@@ -116,6 +127,12 @@ jobs:
           cache: true
       - run: flutter config --enable-swift-package-manager
       - run: flutter test integration_test -d macos --reporter expanded
+        working-directory: example
+      - name: Native unit tests
+        if: always()
+        run: >-
+          xcodebuild test -quiet -workspace macos/Runner.xcworkspace -scheme Runner
+          -only-testing:RunnerTests -destination platform=macOS
         working-directory: example
 
   windows:
