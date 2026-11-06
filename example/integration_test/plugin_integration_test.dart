@@ -20,6 +20,97 @@ final _fullCodecs =
 
 Future<String> _fixture(String name) => files.fixture(name);
 
+enum _Host { android, apple, windows, linux, web }
+
+final _host =
+    kIsWeb
+        ? _Host.web
+        : switch (defaultTargetPlatform) {
+          TargetPlatform.android => _Host.android,
+          TargetPlatform.iOS || TargetPlatform.macOS => _Host.apple,
+          TargetPlatform.windows => _Host.windows,
+          _ => _Host.linux,
+        };
+
+/// A fixture and where the readme's format tables promise it: [compresses]
+/// must succeed, [rejects] must be unsupported, anywhere else either works.
+typedef _Format = ({String name, Set<_Host> compresses, Set<_Host> rejects});
+
+const _all = {..._Host.values};
+
+const List<_Format> _videoFormats = [
+  (name: 'format_h264.m4v', compresses: _all, rejects: {}),
+  (name: 'format_h264.3gp', compresses: _all, rejects: {}),
+  (
+    name: 'format_h264.mkv',
+    compresses: {_Host.android, _Host.windows, _Host.linux},
+    rejects: {_Host.apple, _Host.web},
+  ),
+  (
+    name: 'format_hevc.mp4',
+    compresses: {_Host.android, _Host.apple, _Host.linux},
+    rejects: {},
+  ),
+  (
+    name: 'format_vp8.webm',
+    compresses: {_Host.android, _Host.linux},
+    rejects: {_Host.apple, _Host.web},
+  ),
+  (
+    name: 'format_vp9.webm',
+    compresses: {_Host.android, _Host.linux},
+    rejects: {_Host.apple, _Host.web},
+  ),
+  (
+    name: 'format_vp9.mp4',
+    compresses: {_Host.android, _Host.linux, _Host.web},
+    rejects: {_Host.apple},
+  ),
+  (
+    name: 'format_av1.mp4',
+    compresses: {_Host.android, _Host.linux, _Host.web},
+    rejects: {},
+  ),
+];
+
+const List<_Format> _imageFormats = [
+  (name: 'format.bmp', compresses: _all, rejects: {}),
+  (
+    name: 'format.tiff',
+    compresses: {_Host.apple, _Host.windows, _Host.linux},
+    rejects: {_Host.android, _Host.web},
+  ),
+  (
+    name: 'format.avif',
+    compresses: {_Host.android, _Host.apple, _Host.web},
+    rejects: {},
+  ),
+];
+
+/// What is wrong with [result] for [format] on this platform, or null.
+String? _formatProblem(_Format format, CompressionResult result) {
+  // The CI log then shows what each platform does with the formats the
+  // readme leaves open.
+  debugPrint('format ${_host.name} ${format.name}: ${result.status.name}');
+  final expected =
+      format.compresses.contains(_host)
+          ? CompressionStatus.compressed
+          : format.rejects.contains(_host)
+          ? CompressionStatus.unsupported
+          : null;
+  final allowed = {CompressionStatus.compressed, CompressionStatus.unsupported};
+  if (expected != null && result.status != expected ||
+      !allowed.contains(result.status)) {
+    return '${format.name}: expected ${expected?.name ?? 'compressed or '
+            'unsupported'}, got $result';
+  }
+  if (result.isCompressed && (result.width, result.height) != (320, 240)) {
+    return '${format.name}: ${result.width}x${result.height}, not 320x240';
+  }
+
+  return null;
+}
+
 String _out(String name) => files.outputPath(name);
 
 /// Where a compressed result is: the destination, or an object URL on the
@@ -649,6 +740,44 @@ void main() {
         expect((result.width, result.height), sources[name], reason: name);
       }
       expect(await Future.wait(probes), everyElement(isNotNull));
+    });
+  });
+
+  group('formats', () {
+    testWidgets('compresses the video formats the readme lists', (_) async {
+      final problems = <String>[];
+      for (final format in _videoFormats) {
+        final destination = _out('${format.name}.mp4');
+        final result =
+            await NativeMediaCompressor.compressVideo(
+              source: await _fixture(format.name),
+              destination: destination,
+            ).result;
+        problems.add(_formatProblem(format, result) ?? '');
+        if (result.isCompressed) {
+          final probe = await NativeMediaCompressor.probeVideo(
+            _at(result, destination),
+          );
+          if (probe?.videoCodec != 'video/avc') {
+            problems.add('${format.name}: output is ${probe?.videoCodec}');
+          }
+        }
+      }
+
+      expect(problems.where((problem) => problem.isNotEmpty), isEmpty);
+    });
+
+    testWidgets('compresses the image formats the readme lists', (_) async {
+      final problems = <String>[];
+      for (final format in _imageFormats) {
+        final result = await NativeMediaCompressor.compressImage(
+          source: await _fixture(format.name),
+          destination: _out('${format.name}.jpg'),
+        );
+        problems.add(_formatProblem(format, result) ?? '');
+      }
+
+      expect(problems.where((problem) => problem.isNotEmpty), isEmpty);
     });
   });
 

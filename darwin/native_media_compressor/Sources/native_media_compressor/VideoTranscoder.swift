@@ -256,7 +256,20 @@ final class VideoTranscoder {
 
   private static func failure(_ error: Error?) -> CompressionReply {
     guard let error else { return .status(.failed, "unknown AVFoundation error") }
-    return .status(isInterruption(error) ? .interrupted : .failed, String(describing: error))
+    let status: CompressionStatus =
+      isInterruption(error) ? .interrupted : isUnsupported(error) ? .unsupported : .failed
+    return .status(status, String(describing: error))
+  }
+
+  /// The system cannot open the container (Matroska, WebM) or has no decoder
+  /// for the codec (VP9 on most Apple devices).
+  private static let unsupportedCodes = [
+    AVError.Code.fileFormatNotRecognized.rawValue, AVError.Code.decoderNotFound.rawValue,
+  ]
+
+  private static func isUnsupported(_ error: Error) -> Bool {
+    let error = error as NSError
+    return error.domain == AVFoundationErrorDomain && unsupportedCodes.contains(error.code)
   }
 
   // AVErrorOperationInterrupted and AVErrorMediaServicesWereReset, which the

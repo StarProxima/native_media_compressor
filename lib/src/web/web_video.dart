@@ -124,10 +124,15 @@ final class WebVideoJob {
     final file = BlobByteSource(blob);
     final movie = await Mp4Demuxer.parse(file);
     if (movie == null) {
-      throw const _Stop(
-        CompressionStatus.failed,
-        'not an MP4 or QuickTime file',
-      );
+      throw await _isMatroska(file)
+          ? const _Stop(
+            CompressionStatus.unsupported,
+            'Matroska and WebM are not read on the web',
+          )
+          : const _Stop(
+            CompressionStatus.failed,
+            'not an MP4 or QuickTime file',
+          );
     }
     final video = movie.video;
     if (video == null) {
@@ -333,6 +338,17 @@ final class WebVideoJob {
       height: shownHeight,
       sizeBytes: output.size,
     );
+  }
+
+  /// Matroska and WebM files start with the EBML magic number.
+  static Future<bool> _isMatroska(ByteSource file) async {
+    if (file.length < 4) return false;
+    final head = await file.read(0, 4);
+
+    return head[0] == 0x1A &&
+        head[1] == 0x45 &&
+        head[2] == 0xDF &&
+        head[3] == 0xA3;
   }
 
   static int _us(int ticks, int timescale) => (ticks * 1e6 / timescale).round();

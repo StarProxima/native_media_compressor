@@ -46,17 +46,17 @@ What each platform needs and where it says `unsupported` is listed under [Platfo
 
 ## Supported formats
 
-Output is always the same: video becomes H.264 in MP4 with AAC audio, images become JPEG or PNG. What can be read depends on the decoders the system has, so the lists below are what the platform ships out of the box. CI runs MP4 and MOV with H.264 and HEVC, HDR, HEIC, WebP, GIF, animated PNG and rotated JPEG on every platform, and requires HEVC, HEIC and WebP to work on Android, iOS and macOS.
+Output is always the same: video becomes H.264 in MP4 with AAC audio, images become JPEG or PNG. What can be read depends on the decoders the system has. The tables below are what CI checks on every platform with one sample file per container, codec and image format: an Android 14 emulator, the current iOS simulator and macOS, Windows Server 2025 without Store extensions, Ubuntu with the GStreamer packages from [Platform notes](#platform-notes), and Chrome. A format the platform cannot read returns `unsupported`, never `failed`.
 
 ### Video input
 
 | Platform | Containers | Video codecs | Audio |
 |---|---|---|---|
-| Android | MP4, MOV, 3GP, MKV, WebM | H.264, HEVC, VP8, VP9; AV1 where the device has a decoder (most Android 10+ devices) | AAC is copied |
-| iOS, macOS | MP4, MOV, M4V | H.264, HEVC, and other codecs AVFoundation decodes | AAC is copied |
-| Windows | MP4, MOV, M4V, 3GP | H.264 built in; HEVC, VP9 and AV1 with the matching Microsoft Store extensions | Re-encoded to AAC, one audio track |
-| Linux | Whatever the installed GStreamer plugins open | Whatever the installed GStreamer decoders handle; `gstreamer1.0-libav` covers H.264 and HEVC | AAC is copied |
-| Web | MP4, MOV, not fragmented | Whatever the browser's WebCodecs decodes: H.264 everywhere, HEVC, VP9 and AV1 in most current browsers | AAC is copied |
+| Android | MP4, MOV, M4V, 3GP, MKV, WebM | H.264, HEVC, VP8, VP9, AV1, as far as the device has decoders; AV1 is on most Android 10+ devices | AAC is copied |
+| iOS, macOS | MP4, MOV, M4V, 3GP; not MKV or WebM | H.264, HEVC; AV1 only with a hardware decoder (A17 Pro, M3 and newer); not VP8 or VP9 | AAC is copied |
+| Windows | MP4, MOV, M4V, 3GP, MKV | H.264 built in; HEVC, VP8, VP9 and AV1 with the matching Microsoft Store extensions | Re-encoded to AAC, one audio track |
+| Linux | Whatever the installed GStreamer plugins open; with the packages from Platform notes MP4, MOV, M4V, 3GP, MKV, WebM | Whatever the installed decoders handle; with those packages H.264, HEVC, VP8, VP9, AV1 | AAC is copied |
+| Web | MP4, MOV, M4V, 3GP, not fragmented; not MKV or WebM | Whatever the browser's WebCodecs decodes: H.264 everywhere; VP9 and AV1 in current Chrome, Edge and Firefox; HEVC where the device decodes it in hardware | AAC is copied |
 
 Where audio is copied, any other audio codec makes the call `unsupported` unless `includeAudio` is `false`.
 
@@ -64,11 +64,11 @@ Where audio is copied, any other audio codec makes the call `unsupported` unless
 
 | Platform | Formats |
 |---|---|
-| Android | JPEG, PNG, WebP, GIF, BMP; HEIC and HEIF on Android 9+; AVIF on Android 12+ |
+| Android | JPEG, PNG, WebP, GIF, BMP; HEIC and HEIF on Android 9+; AVIF on Android 12+; not TIFF |
 | iOS, macOS | JPEG, PNG, HEIC, GIF, TIFF, BMP; WebP on iOS 14+ and macOS 11+; AVIF on iOS 16+ and macOS 13+ |
 | Windows | JPEG, PNG, GIF, BMP, TIFF built in; WebP, HEIC and AVIF with the matching Microsoft Store extensions |
-| Linux | JPEG, PNG, GIF, BMP, TIFF through gdk-pixbuf; WebP, HEIC and AVIF with the matching gdk-pixbuf loaders |
-| Web | JPEG, PNG, GIF, WebP, BMP, AVIF; HEIC in Safari only |
+| Linux | JPEG, PNG, GIF, BMP, TIFF through gdk-pixbuf; WebP, HEIC and AVIF with the matching gdk-pixbuf loaders, such as `webp-pixbuf-loader` and `heif-gdk-pixbuf` |
+| Web | JPEG, PNG, GIF, WebP, BMP, AVIF; HEIC in Safari only; not TIFF |
 
 Animated GIF, WebP and PNG keep their first frame.
 
