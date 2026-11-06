@@ -85,6 +85,9 @@ const List<_Format> _imageFormats = [
 
 /// What is wrong with [result] for [format] on this platform, or null.
 String? _formatProblem(_Format format, CompressionResult result) {
+  // The CI log then shows what each platform does with the formats the
+  // readme leaves open.
+  debugPrint('format ${_host.name} ${format.name}: ${result.status.name}');
   final expected =
       format.compresses.contains(_host)
           ? CompressionStatus.compressed
