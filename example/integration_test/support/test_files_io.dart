@@ -53,8 +53,11 @@ List<String> list(String path) => [
     entry.path.substring(path.length + 1),
 ];
 
+/// Creates an empty directory at [path], dropping what an earlier run left.
 String createDirectory(String path) {
-  Directory(path).createSync(recursive: true);
+  final directory = Directory(path);
+  if (directory.existsSync()) directory.deleteSync(recursive: true);
+  directory.createSync(recursive: true);
 
   return path;
 }
