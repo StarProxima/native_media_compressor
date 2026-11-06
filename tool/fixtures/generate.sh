@@ -58,6 +58,28 @@ ff -f lavfi -i "smptehdbars=size=1280x720:rate=30:duration=1" \
 
 ff -f lavfi -i "$TONE:duration=1" -c:a aac -b:a 128k audio_only.m4a
 
+# One second of 320x240 per container and codec the readme lists, so the
+# format matrix test stays cheap. Video only, except where AAC fits the
+# container, so a failure points at the video path.
+SMALL="testsrc2=size=320x240:rate=30:duration=1"
+ff -f lavfi -i "$SMALL" -f lavfi -i "$TONE:duration=1" \
+  -c:v libx264 -preset veryfast -b:v 400k -pix_fmt yuv420p -c:a aac -b:a 64k -f ipod format_h264.m4v
+ff -f lavfi -i "$SMALL" -f lavfi -i "$TONE:duration=1" \
+  -c:v libx264 -preset veryfast -b:v 400k -pix_fmt yuv420p -c:a aac -b:a 64k format_h264.3gp
+ff -f lavfi -i "$SMALL" -f lavfi -i "$TONE:duration=1" \
+  -c:v libx264 -preset veryfast -b:v 400k -pix_fmt yuv420p -c:a aac -b:a 64k format_h264.mkv
+ff -f lavfi -i "$SMALL" -c:v libx265 -preset veryfast -b:v 400k -pix_fmt yuv420p -tag:v hvc1 \
+  -x265-params log-level=error format_hevc.mp4
+ff -f lavfi -i "$SMALL" -c:v libvpx -b:v 400k format_vp8.webm
+ff -f lavfi -i "$SMALL" -c:v libvpx-vp9 -b:v 400k format_vp9.webm
+ff -f lavfi -i "$SMALL" -c:v libvpx-vp9 -b:v 400k format_vp9.mp4
+ff -f lavfi -i "$SMALL" -c:v libsvtav1 -b:v 400k -pix_fmt yuv420p format_av1.mp4
+
+# Still images in the formats the readme lists beyond JPEG, PNG, WebP, GIF and HEIC.
+ff -f lavfi -i "testsrc2=size=320x240:duration=1" -frames:v 1 -c:v bmp format.bmp
+ff -f lavfi -i "testsrc2=size=320x240:duration=1" -frames:v 1 -c:v tiff -pix_fmt rgb24 -compression_algo lzw format.tiff
+ff -f lavfi -i "testsrc2=size=320x240:duration=1" -frames:v 1 -c:v libsvtav1 -pix_fmt yuv420p -f avif format.avif
+
 # screen_ios.mov and screen_android.mp4 are real screen recordings from the iOS
 # simulator (`xcrun simctl io <device> recordVideo --codec=hevc`) and an
 # Android emulator (`adb shell screenrecord`), trimmed to two seconds. They are
