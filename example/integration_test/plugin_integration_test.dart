@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:native_media_compressor/native_media_compressor.dart';
 
+import 'support/background.dart';
 import 'support/test_files.dart' as files;
 
 final _isAndroid = !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
@@ -334,6 +335,79 @@ void main() {
       _expectAbsent(result, destination);
     });
 
+    testWidgets('cancel stops a compression that is already running', (
+      _,
+    ) async {
+      final destination = _out('cancelled-midway.mp4');
+      final task = NativeMediaCompressor.compressVideo(
+        source: await _fixture('long_1080p.mp4'),
+        destination: destination,
+        options: const VideoOptions(maxShortSide: 1080),
+      );
+      await task.progress.firstWhere((value) => value > 0);
+      await task.cancel();
+      final result = await task.result;
+
+      expect(result.status, CompressionStatus.cancelled, reason: '$result');
+      _expectAbsent(result, destination);
+    });
+
+    testWidgets('cancels a queued video without running it', (_) async {
+      final running = NativeMediaCompressor.compressVideo(
+        source: await _fixture('long_1080p.mp4'),
+        destination: _out('queue-first.mp4'),
+        options: const VideoOptions(maxShortSide: 360),
+      );
+      final queuedDestination = _out('queue-second.mp4');
+      final queued = NativeMediaCompressor.compressVideo(
+        source: await _fixture('h264_rotated_90.mp4'),
+        destination: queuedDestination,
+        options: const VideoOptions(maxShortSide: 240),
+      );
+      final queuedProgress = queued.progress.toList();
+      await queued.cancel();
+
+      final queuedResult = await queued.result;
+      final runningResult = await running.result;
+
+      expect(queuedResult.status, CompressionStatus.cancelled);
+      _expectAbsent(queuedResult, queuedDestination);
+      expect(await queuedProgress, isEmpty);
+      expect(
+        runningResult.status,
+        CompressionStatus.compressed,
+        reason: '$runningResult',
+      );
+    });
+
+    testWidgets('never scales a video up', (_) async {
+      final result =
+          await NativeMediaCompressor.compressVideo(
+            source: await _fixture('h264_aac_1080p.mp4'),
+            destination: _out('not-upscaled.mp4'),
+            options: const VideoOptions(maxShortSide: 2160),
+          ).result;
+
+      expect(result.status, CompressionStatus.compressed, reason: '$result');
+      final (short, long) = _sides(result.width, result.height);
+      expect(short, inInclusiveRange(1072, 1080));
+      expect(long, inInclusiveRange(1904, 1920));
+    });
+
+    testWidgets('fits the long side when only maxLongSide is set', (_) async {
+      final result =
+          await NativeMediaCompressor.compressVideo(
+            source: await _fixture('h264_aac_1080p.mp4'),
+            destination: _out('long-side.mp4'),
+            options: const VideoOptions(maxShortSide: null, maxLongSide: 640),
+          ).result;
+
+      expect(result.status, CompressionStatus.compressed, reason: '$result');
+      final (short, long) = _sides(result.width, result.height);
+      expect(long, inInclusiveRange(624, 640));
+      expect(long / short, closeTo(16 / 9, 0.05));
+    });
+
     testWidgets('a file without video is unsupported or failed', (_) async {
       for (final name in ['audio_only.m4a', 'broken.jpg']) {
         final destination = _out('$name.mp4');
@@ -544,6 +618,38 @@ void main() {
       );
       _expectAbsent(result, destination);
     });
+
+    testWidgets('compresses and probes many images at once', (_) async {
+      final sources = {
+        'photo_exif_rotated.jpg': (450, 600),
+        'alpha.png': (600, 400),
+        'animated.gif': (320, 240),
+        'animated.png': (320, 240),
+      };
+      final paths = {
+        for (final name in sources.keys) name: await _fixture(name),
+      };
+
+      final work = [
+        for (var copy = 0; copy < 3; copy++)
+          for (final MapEntry(key: name, value: path) in paths.entries)
+            NativeMediaCompressor.compressImage(
+              source: path,
+              destination: _out('parallel-$copy-$name.jpg'),
+              options: const ImageOptions(maxLongSide: 600),
+            ).then((result) => (name, result)),
+      ];
+      final probes = [
+        for (final path in paths.values) NativeMediaCompressor.probeImage(path),
+      ];
+      final results = await Future.wait(work);
+
+      for (final (name, result) in results) {
+        expect(result.status, CompressionStatus.compressed, reason: name);
+        expect((result.width, result.height), sources[name], reason: name);
+      }
+      expect(await Future.wait(probes), everyElement(isNotNull));
+    });
   });
 
   // The web ignores destinations: results are always new object URLs.
@@ -627,6 +733,156 @@ void main() {
       expect(result.isCompressed, isFalse);
       expect(files.readText(inside), 'keep');
       expect(files.exists(source), isTrue);
+    });
+
+    testWidgets('no temporary file is left behind', (_) async {
+      final directory = files.createDirectory(_out('leftovers'));
+
+      final outcomes = [
+        (await NativeMediaCompressor.compressImage(
+          source: await _fixture('broken.jpg'),
+          destination: '$directory/broken.jpg',
+        )).status,
+        (await NativeMediaCompressor.compressVideo(
+              source: await _fixture('audio_only.m4a'),
+              destination: '$directory/audio.mp4',
+            ).result)
+            .status,
+        (await NativeMediaCompressor.compressVideo(
+              source: await _fixture('h264_aac_1080p.mp4'),
+              destination: '$directory/too-large.mp4',
+              options: const VideoOptions(
+                maxShortSide: 1080,
+                videoBitrate: 8000000,
+                maxBytes: 20000,
+              ),
+            ).result)
+            .status,
+      ];
+      final running = NativeMediaCompressor.compressVideo(
+        source: await _fixture('long_1080p.mp4'),
+        destination: '$directory/cancelled.mp4',
+        options: const VideoOptions(maxShortSide: 1080),
+      );
+      await running.progress.firstWhere((value) => value > 0);
+      await running.cancel();
+      outcomes.add((await running.result).status);
+
+      expect(outcomes, everyElement(isNot(CompressionStatus.compressed)));
+      expect(files.list(directory), isEmpty);
+
+      final image = await NativeMediaCompressor.compressImage(
+        source: await _fixture('photo_exif_rotated.jpg'),
+        destination: '$directory/photo.jpg',
+      );
+      final video =
+          await NativeMediaCompressor.compressVideo(
+            source: await _fixture('h264_rotated_90.mp4'),
+            destination: '$directory/video.mp4',
+            options: const VideoOptions(maxShortSide: 240),
+          ).result;
+
+      expect(
+        [image.status, video.status],
+        [CompressionStatus.compressed, CompressionStatus.compressed],
+      );
+      expect(
+        files.list(directory),
+        unorderedEquals(['photo.jpg', 'video.mp4']),
+      );
+    });
+
+    testWidgets('paths may contain spaces and non-Latin letters', (_) async {
+      final directory = files.createDirectory(_out('папка с пробелами 📷'));
+      final photo = await files.copyFixture(
+        'photo_exif_rotated.jpg',
+        '$directory/фото 1.jpg',
+      );
+      final clip = await files.copyFixture(
+        'h264_rotated_90.mp4',
+        '$directory/видео 1.mp4',
+      );
+
+      expect(await NativeMediaCompressor.probeImage(photo), isNotNull);
+      expect(await NativeMediaCompressor.probeVideo(clip), isNotNull);
+      final image = await NativeMediaCompressor.compressImage(
+        source: photo,
+        destination: '$directory/сжатое фото.jpg',
+        options: const ImageOptions(maxLongSide: 800),
+      );
+      final video =
+          await NativeMediaCompressor.compressVideo(
+            source: clip,
+            destination: '$directory/сжатое видео.mp4',
+            options: const VideoOptions(maxShortSide: 240),
+          ).result;
+
+      expect(image.status, CompressionStatus.compressed, reason: '$image');
+      expect(video.status, CompressionStatus.compressed, reason: '$video');
+      expect(files.exists('$directory/сжатое фото.jpg'), isTrue);
+      expect(files.exists('$directory/сжатое видео.mp4'), isTrue);
+    });
+  });
+  group('native', skip: kIsWeb, () {
+    testWidgets('works from a background isolate', (_) async {
+      final image = await _fixture('photo_exif_rotated.jpg');
+      final video = await _fixture('h264_rotated_90.mp4');
+      final imageDestination = _out('isolate.jpg');
+      final videoDestination = _out('isolate.mp4');
+
+      final (imageStatus, videoStatus, probe) = await runInBackground(() async {
+        final imageResult = await NativeMediaCompressor.compressImage(
+          source: image,
+          destination: imageDestination,
+          options: const ImageOptions(maxLongSide: 800),
+        );
+        final videoResult =
+            await NativeMediaCompressor.compressVideo(
+              source: video,
+              destination: videoDestination,
+              options: const VideoOptions(maxShortSide: 240),
+            ).result;
+        final metadata = await NativeMediaCompressor.probeImage(image);
+
+        return (
+          imageResult.status,
+          videoResult.status,
+          (metadata?.width, metadata?.height),
+        );
+      });
+
+      expect(imageStatus, CompressionStatus.compressed);
+      expect(videoStatus, CompressionStatus.compressed);
+      expect(probe, (1200, 1600));
+      expect(files.exists(imageDestination), isTrue);
+      expect(files.exists(videoDestination), isTrue);
+    });
+
+    testWidgets('reads content:// URIs on Android', skip: !_isAndroid, (
+      _,
+    ) async {
+      final photo = files.contentUri(await _fixture('photo_exif_rotated.jpg'));
+      final clip = files.contentUri(await _fixture('h264_rotated_90.mp4'));
+
+      final imageProbe = await NativeMediaCompressor.probeImage(photo);
+      final videoProbe = await NativeMediaCompressor.probeVideo(clip);
+      final image = await NativeMediaCompressor.compressImage(
+        source: photo,
+        destination: _out('content.jpg'),
+        options: const ImageOptions(maxLongSide: 800),
+      );
+      final video =
+          await NativeMediaCompressor.compressVideo(
+            source: clip,
+            destination: _out('content.mp4'),
+            options: const VideoOptions(maxShortSide: 240),
+          ).result;
+
+      expect((imageProbe!.width, imageProbe.height), (1200, 1600));
+      expect(videoProbe!.width, lessThan(videoProbe.height));
+      expect(image.status, CompressionStatus.compressed, reason: '$image');
+      expect((image.width, image.height), (600, 800));
+      expect(video.status, CompressionStatus.compressed, reason: '$video');
     });
   });
 }

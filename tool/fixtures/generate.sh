@@ -19,6 +19,12 @@ ff -f lavfi -i "$VIDEO:duration=2" -f lavfi -i "$TONE:duration=2" \
 
 ff -display_rotation:v 90 -i h264_aac_1080p.mp4 -t 1 -c copy h264_rotated_90.mp4
 
+# Long enough that a cancel sent on the first progress event lands mid-flight
+# even on fast hardware encoders.
+ff -f lavfi -i "$VIDEO:duration=8" -f lavfi -i "$TONE:duration=8" \
+  -c:v libx264 -preset veryfast -b:v 600k -pix_fmt yuv420p -c:a aac -b:a 48k \
+  -movflags +faststart long_1080p.mp4
+
 ff -f lavfi -i "testsrc2=size=1280x720:rate=30:duration=1" -f lavfi -i "$TONE:duration=1" \
   -c:v libx265 -preset veryfast -b:v 1500k -pix_fmt yuv420p -tag:v hvc1 -c:a aac -b:a 128k \
   -x265-params log-level=error hevc_aac_720p.mov
