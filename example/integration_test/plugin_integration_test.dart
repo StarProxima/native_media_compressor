@@ -40,33 +40,37 @@ const _all = {..._Host.values};
 
 const List<_Format> _videoFormats = [
   (name: 'format_h264.m4v', compresses: _all, rejects: {}),
-  (
-    name: 'format_h264.3gp',
-    compresses: {_Host.android, _Host.windows},
-    rejects: {},
-  ),
+  (name: 'format_h264.3gp', compresses: _all, rejects: {}),
   (
     name: 'format_h264.mkv',
-    compresses: {_Host.android, _Host.linux},
-    rejects: {_Host.web},
+    compresses: {_Host.android, _Host.windows, _Host.linux},
+    rejects: {_Host.apple, _Host.web},
   ),
   (
     name: 'format_hevc.mp4',
-    compresses: {_Host.android, _Host.apple},
+    compresses: {_Host.android, _Host.apple, _Host.linux},
     rejects: {},
   ),
   (
     name: 'format_vp8.webm',
     compresses: {_Host.android, _Host.linux},
-    rejects: {_Host.web},
+    rejects: {_Host.apple, _Host.web},
   ),
   (
     name: 'format_vp9.webm',
     compresses: {_Host.android, _Host.linux},
-    rejects: {_Host.web},
+    rejects: {_Host.apple, _Host.web},
   ),
-  (name: 'format_vp9.mp4', compresses: {_Host.android, _Host.web}, rejects: {}),
-  (name: 'format_av1.mp4', compresses: {_Host.android, _Host.web}, rejects: {}),
+  (
+    name: 'format_vp9.mp4',
+    compresses: {_Host.android, _Host.linux, _Host.web},
+    rejects: {_Host.apple},
+  ),
+  (
+    name: 'format_av1.mp4',
+    compresses: {_Host.android, _Host.linux, _Host.web},
+    rejects: {},
+  ),
 ];
 
 const List<_Format> _imageFormats = [
