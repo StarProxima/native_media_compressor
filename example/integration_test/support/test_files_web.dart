@@ -37,5 +37,10 @@ String readText(String path) => throw UnsupportedError('no files on the web');
 Future<String> copyFixture(String name, String path) =>
     throw UnsupportedError('no files on the web');
 
+String contentUri(String path) =>
+    throw UnsupportedError('content:// URIs are Android only');
+
+List<String> list(String path) => throw UnsupportedError('no files on the web');
+
 String createDirectory(String path) =>
     throw UnsupportedError('no files on the web');

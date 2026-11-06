@@ -38,6 +38,21 @@ Future<String> copyFixture(String name, String path) async {
   return path;
 }
 
+/// The `content://` URI under which the example app's CacheFileProvider serves
+/// [path] on Android. [path] must be inside the temporary directory.
+String contentUri(String path) =>
+    Uri(
+      scheme: 'content',
+      host: 'io.github.starproxima.native_media_compressor_example.files',
+      path: path.substring(_work.parent.path.length),
+    ).toString();
+
+/// Names of the entries in [path], without the directory.
+List<String> list(String path) => [
+  for (final entry in Directory(path).listSync())
+    entry.path.substring(path.length + 1),
+];
+
 String createDirectory(String path) {
   Directory(path).createSync(recursive: true);
 
