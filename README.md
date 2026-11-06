@@ -15,6 +15,23 @@ Compress images and videos in Flutter with the codecs the platform already ships
 - **Probe** size, rotation, duration, codecs, HDR and frame count from the headers, without decoding, to decide whether compression is worth it.
 - **Results instead of exceptions.** Every call ends with a status, and a failed call never touches the destination file.
 
+## Why the platform's codecs
+
+Every phone and computer already has an H.264 encoder and image codecs: the camera, the gallery and the browser use them, and on most devices the video encoder runs in hardware. Packages built on ffmpeg bring a second copy of all that into your app, which costs several to tens of megabytes depending on the build and the number of CPU architectures, and their software encoders are slower and use more battery than the system's hardware ones.
+
+This package calls the system codecs directly, so your app grows only by the package's own code:
+
+| Platform | Added to a release app |
+|---|---|
+| Android, arm64 APK | about 160 KB |
+| iOS, app bundle | about 520 KB |
+| macOS, app bundle | about 1 MB, one universal binary for Intel and Apple silicon |
+| Web, `main.dart.js` | about 75 KB, 23 KB gzipped |
+
+Measured with Flutter 3.47.8 as the difference between an empty app and the same app calling every method of the package. Windows and Linux are not measured yet.
+
+The trade-off: the output is always H.264, JPEG or PNG, and which inputs decode depends on the device and the system version, see [Supported formats](#supported-formats).
+
 ## Platform support
 
 | Platform | Video | Images | Probe |
