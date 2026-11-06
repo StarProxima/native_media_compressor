@@ -27,6 +27,34 @@ Compress images and videos in Flutter with the codecs the platform already ships
 
 What each platform needs and where it says `unsupported` is listed under [Platform notes](#platform-notes).
 
+## Supported formats
+
+Output is always the same: video becomes H.264 in MP4 with AAC audio, images become JPEG or PNG. What can be read depends on the decoders the system has, so the lists below are what the platform ships out of the box. CI runs MP4 and MOV with H.264 and HEVC, HDR, HEIC, WebP, GIF, animated PNG and rotated JPEG on every platform, and requires HEVC, HEIC and WebP to work on Android, iOS and macOS.
+
+### Video input
+
+| Platform | Containers | Video codecs | Audio |
+|---|---|---|---|
+| Android | MP4, MOV, 3GP, MKV, WebM | H.264, HEVC, VP8, VP9; AV1 where the device has a decoder (most Android 10+ devices) | AAC is copied |
+| iOS, macOS | MP4, MOV, M4V | H.264, HEVC, and other codecs AVFoundation decodes | AAC is copied |
+| Windows | MP4, MOV, M4V, 3GP | H.264 built in; HEVC, VP9 and AV1 with the matching Microsoft Store extensions | Re-encoded to AAC, one audio track |
+| Linux | Whatever the installed GStreamer plugins open | Whatever the installed GStreamer decoders handle; `gstreamer1.0-libav` covers H.264 and HEVC | AAC is copied |
+| Web | MP4, MOV, not fragmented | Whatever the browser's WebCodecs decodes: H.264 everywhere, HEVC, VP9 and AV1 in most current browsers | AAC is copied |
+
+Where audio is copied, any other audio codec makes the call `unsupported` unless `includeAudio` is `false`.
+
+### Image input
+
+| Platform | Formats |
+|---|---|
+| Android | JPEG, PNG, WebP, GIF, BMP; HEIC and HEIF on Android 9+; AVIF on Android 12+ |
+| iOS, macOS | JPEG, PNG, HEIC, GIF, TIFF, BMP; WebP on iOS 14+ and macOS 11+; AVIF on iOS 16+ and macOS 13+ |
+| Windows | JPEG, PNG, GIF, BMP, TIFF built in; WebP, HEIC and AVIF with the matching Microsoft Store extensions |
+| Linux | JPEG, PNG, GIF, BMP, TIFF through gdk-pixbuf; WebP, HEIC and AVIF with the matching gdk-pixbuf loaders |
+| Web | JPEG, PNG, GIF, WebP, BMP, AVIF; HEIC in Safari only |
+
+Animated GIF, WebP and PNG keep their first frame.
+
 ## Installation
 
 ```sh
