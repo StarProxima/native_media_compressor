@@ -1,0 +1,31 @@
+# A .pubignore replaces .gitignore for publishing, so this repeats it.
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+*.iml
+*.ipr
+*.iws
+.idea/
+/pubspec.lock
+**/doc/api/
+.dart_tool/
+.flutter-plugins-dependencies
+build/
+/coverage/
+/example/pubspec.lock
+
+# Development only: test media, generators and agent rules.
+/example/integration_test/fixtures/
+/tool/
+/AGENTS.md
+/CLAUDE.md
+/.github/

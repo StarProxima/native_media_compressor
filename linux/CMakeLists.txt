@@ -11,39 +11,58 @@ project(${PROJECT_NAME} LANGUAGES CXX)
 # not be changed.
 set(PLUGIN_NAME "native_media_compressor_plugin")
 
-# Any new source files that you add to the plugin should be added here.
+find_package(PkgConfig REQUIRED)
+find_package(Threads REQUIRED)
+# GStreamer headers are only needed at build time: the libraries are loaded
+# with dlopen. Without the headers, video calls answer unsupported.
+pkg_check_modules(NMC_GST QUIET gstreamer-1.0 gstreamer-pbutils-1.0 gstreamer-video-1.0)
+if(NOT NMC_GST_FOUND)
+  message(WARNING "native_media_compressor: GStreamer development headers not found; "
+    "video compression will report unsupported. Install libgstreamer1.0-dev and "
+    "libgstreamer-plugins-base1.0-dev to enable it.")
+endif()
+
 list(APPEND PLUGIN_SOURCES
+  "gst_api.cc"
+  "image_codec.cc"
+  "media_common.cc"
+  "messages.g.cc"
   "native_media_compressor_plugin.cc"
+  "video_queue.cc"
+  "video_transcoder.cc"
 )
+
+function(nmc_configure_target TARGET)
+  apply_standard_settings(${TARGET})
+  target_compile_features(${TARGET} PRIVATE cxx_std_17)
+  target_link_libraries(${TARGET} PRIVATE flutter PkgConfig::GTK Threads::Threads ${CMAKE_DL_LIBS})
+  if(NMC_GST_FOUND)
+    target_include_directories(${TARGET} SYSTEM PRIVATE ${NMC_GST_INCLUDE_DIRS})
+    target_compile_definitions(${TARGET} PRIVATE NMC_HAVE_GST_HEADERS)
+  endif()
+endfunction()
 
 # Define the plugin library target. Its name must not be changed (see comment
 # on PLUGIN_NAME above).
 add_library(${PLUGIN_NAME} SHARED
   ${PLUGIN_SOURCES}
 )
-
-# Apply a standard set of build settings that are configured in the
-# application-level CMakeLists.txt. This can be removed for plugins that want
-# full control over build settings.
-apply_standard_settings(${PLUGIN_NAME})
+nmc_configure_target(${PLUGIN_NAME})
 
 # Symbols are hidden by default to reduce the chance of accidental conflicts
 # between plugins. This should not be removed; any symbols that should be
 # exported should be explicitly exported with the FLUTTER_PLUGIN_EXPORT macro.
+# --no-undefined fails the build on any direct GStreamer reference, which would
+# otherwise stop the app from starting on systems without GStreamer.
 set_target_properties(${PLUGIN_NAME} PROPERTIES
-  CXX_VISIBILITY_PRESET hidden)
+  CXX_VISIBILITY_PRESET hidden
+  LINK_FLAGS "-Wl,--no-undefined")
 target_compile_definitions(${PLUGIN_NAME} PRIVATE FLUTTER_PLUGIN_IMPL)
 
-# Source include directories and library dependencies. Add any plugin-specific
-# dependencies here.
 target_include_directories(${PLUGIN_NAME} INTERFACE
   "${CMAKE_CURRENT_SOURCE_DIR}/include")
-target_link_libraries(${PLUGIN_NAME} PRIVATE flutter)
-target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::GTK)
 
 # List of absolute paths to libraries that should be bundled with the plugin.
-# This list could contain prebuilt libraries, or libraries created by an
-# external build triggered from this build file.
 set(native_media_compressor_bundled_libraries
   ""
   PARENT_SCOPE
@@ -65,7 +84,7 @@ enable_testing()
 include(FetchContent)
 FetchContent_Declare(
   googletest
-  URL https://github.com/google/googletest/archive/release-1.11.0.zip
+  URL https://github.com/google/googletest/releases/download/v1.18.0/googletest-1.18.0.tar.gz
 )
 # Prevent overriding the parent project's compiler/linker settings
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
@@ -80,11 +99,9 @@ add_executable(${TEST_RUNNER}
   test/native_media_compressor_plugin_test.cc
   ${PLUGIN_SOURCES}
 )
-apply_standard_settings(${TEST_RUNNER})
+nmc_configure_target(${TEST_RUNNER})
 target_include_directories(${TEST_RUNNER} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-target_link_libraries(${TEST_RUNNER} PRIVATE flutter)
-target_link_libraries(${TEST_RUNNER} PRIVATE PkgConfig::GTK)
-target_link_libraries(${TEST_RUNNER} PRIVATE gtest_main gmock)
+target_link_libraries(${TEST_RUNNER} PRIVATE gtest_main)
 
 # Enable automatic test discovery.
 include(GoogleTest)

@@ -1,0 +1,231 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: 3.47.8
+
+jobs:
+  dart:
+    name: Analyze and unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - run: flutter pub get
+      - name: Formatting
+        run: git ls-files -z '*.dart' ':!:*.g.dart' | xargs -0 dart format --output=none --set-exit-if-changed
+      - run: flutter analyze
+      - run: flutter test
+      - name: Generated bindings match the schema
+        run: |
+          dart run pigeon --input pigeons/messages.dart
+          git diff --exit-code
+      - run: dart pub publish --dry-run
+
+  android:
+    name: Android integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - run: flutter pub get
+        working-directory: example
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          working-directory: example
+          script: flutter test integration_test -d emulator-5554 --reporter expanded
+
+  ios:
+    name: iOS integration tests
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - run: flutter config --enable-swift-package-manager
+      - name: Boot a simulator
+        id: simulator
+        run: |
+          udid=$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          devices = json.load(sys.stdin)["devices"]
+          phones = [d for runtime, ds in devices.items() if "iOS" in runtime for d in ds if d["name"].startswith("iPhone")]
+          print(phones[-1]["udid"])')
+          xcrun simctl boot "$udid"
+          echo "udid=$udid" >> "$GITHUB_OUTPUT"
+      - run: flutter test integration_test -d ${{ steps.simulator.outputs.udid }} --reporter expanded
+        working-directory: example
+
+  cocoapods:
+    name: Build iOS and macOS with CocoaPods
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - run: flutter config --no-enable-swift-package-manager
+      - run: flutter build ios --simulator --debug
+        working-directory: example
+      - run: flutter build macos --debug
+        working-directory: example
+
+  macos:
+    name: macOS integration tests
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - run: flutter config --enable-swift-package-manager
+      - run: flutter test integration_test -d macos --reporter expanded
+        working-directory: example
+
+  windows:
+    name: Windows integration tests
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - name: Install Media Foundation
+        shell: pwsh
+        run: |
+          $feature = Get-WindowsFeature -Name Server-Media-Foundation -ErrorAction SilentlyContinue
+          if ($feature -and -not $feature.Installed) { Install-WindowsFeature -Name Server-Media-Foundation }
+          Get-WindowsFeature -Name Server-Media-Foundation -ErrorAction SilentlyContinue
+      - run: flutter test integration_test -d windows --reporter expanded
+        working-directory: example
+      - name: Native unit tests
+        if: always()
+        shell: pwsh
+        run: |
+          $runner = Get-ChildItem -Path example/build/windows -Recurse -Filter native_media_compressor_test.exe | Select-Object -First 1
+          if (-not $runner) { throw 'native_media_compressor_test.exe was not built' }
+          & $runner.FullName --gtest_color=no
+          if ($LASTEXITCODE -ne 0) { throw "gtest exited with $LASTEXITCODE" }
+      - name: Show application crashes
+        if: failure()
+        shell: pwsh
+        run: |
+          Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'Application Error', 'Windows Error Reporting' } -MaxEvents 10 -ErrorAction SilentlyContinue |
+            Format-List TimeCreated, Message
+
+  linux:
+    name: Linux integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install GTK and GStreamer
+        run: |
+          sudo apt-get update
+          # gstreamer1.0-libav provides the H.264 and HEVC decoders on Ubuntu.
+          sudo apt-get install -y --no-install-recommends \
+            clang cmake ninja-build pkg-config libgtk-3-dev xvfb \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-tools \
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav
+          for loader in webp-pixbuf-loader heif-gdk-pixbuf libheif-plugin-libde265; do
+            sudo apt-get install -y --no-install-recommends "$loader" || echo "$loader is not available"
+          done
+      - name: Show available codecs
+        run: |
+          for element in x264enc openh264enc avdec_h264 avdec_h265 h264parse h265parse mp4mux aacparse; do
+            gst-inspect-1.0 --exists "$element" && echo "$element: yes" || echo "$element: no"
+          done
+          ls /usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders || true
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - run: xvfb-run -a flutter test integration_test -d linux --reporter expanded
+        working-directory: example
+      - name: Native unit tests
+        if: always()
+        run: |
+          runner=$(find example/build/linux -type f -name native_media_compressor_test | head -n 1)
+          if [ -z "$runner" ]; then echo "native_media_compressor_test was not built"; exit 1; fi
+          "$runner" --gtest_color=no
+
+  web:
+    name: Web integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - run: flutter pub get
+        working-directory: example
+      - name: Start ChromeDriver
+        run: |
+          google-chrome --version
+          "$CHROMEWEBDRIVER/chromedriver" --port=4444 &
+      - name: Run in Chrome
+        run: >-
+          flutter drive --profile --headless
+          -d web-server --browser-name=chrome
+          --driver=test_driver/integration_test.dart
+          --target=integration_test/plugin_integration_test.dart
+        working-directory: example
+
+  minimum:
+    name: Build with Flutter 3.29 and AGP 8
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.29.2
+          cache: true
+      - run: tool/ci/use-agp8.sh
+      - run: flutter build apk --debug
+        working-directory: example
