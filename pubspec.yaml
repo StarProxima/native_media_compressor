@@ -19,7 +19,7 @@ dependencies:
   flutter_web_plugins:
     sdk: flutter
   meta: ^1.15.0
-  plugin_platform_interface: ^2.0.2
+  plugin_platform_interface: ^2.1.0
   web: ^1.1.0
 
 dev_dependencies:
