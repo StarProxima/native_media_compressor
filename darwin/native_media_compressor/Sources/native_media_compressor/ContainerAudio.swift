@@ -3,8 +3,7 @@ import Foundation
 /// Lists the sound tracks of an MP4 or QuickTime file straight from its boxes.
 ///
 /// AVFoundation leaves out tracks it cannot decode, such as MP3 inside MP4,
-/// so without this such audio would be dropped silently instead of being
-/// reported as unsupported.
+/// so without this such audio would be dropped silently.
 enum ContainerAudio {
   struct Track {
     let id: Int
@@ -15,10 +14,112 @@ enum ContainerAudio {
   }
 
   private static let maxMovieBoxSize: UInt64 = 64 << 20
+  private static let maxFixedSizeSamples = 1 << 24
 
   static func soundTracks(at url: URL) -> [Track] {
     guard let movie = readMovieBox(url) else { return [] }
     return children(of: movie, type: "trak").compactMap(soundTrack)
+  }
+
+  /// Writes the samples of track `id` back to back into `destination`.
+  ///
+  /// MPEG audio frames carry their own headers, so the result is a plain MP3
+  /// stream that AVFoundation reads although it hides the same frames inside
+  /// MP4.
+  static func copySamples(ofTrack id: Int, from url: URL, to destination: URL) -> Bool {
+    guard let movie = readMovieBox(url),
+      let trak = children(of: movie, type: "trak").first(where: { trackID(of: $0) == id }),
+      let stbl = children(of: trak, type: "mdia").first
+        .flatMap({ children(of: $0, type: "minf").first })
+        .flatMap({ children(of: $0, type: "stbl").first }),
+      let ranges = sampleRanges(stbl), !ranges.isEmpty,
+      let input = try? FileHandle(forReadingFrom: url),
+      FileManager.default.createFile(atPath: destination.path, contents: nil),
+      let output = try? FileHandle(forWritingTo: destination)
+    else { return false }
+    defer {
+      input.closeFile()
+      output.closeFile()
+    }
+    let fileSize = input.seekToEndOfFile()
+    for range in ranges {
+      guard range.upperBound <= fileSize else { return false }
+      input.seek(toFileOffset: range.lowerBound)
+      let data = input.readData(ofLength: Int(range.upperBound - range.lowerBound))
+      guard data.count == range.count else { return false }
+      output.write(data)
+    }
+    return true
+  }
+
+  /// File byte ranges of every sample, in decoding order, from the sample
+  /// sizes, the chunk offsets and the sample-to-chunk runs.
+  static func sampleRanges(sizes: [UInt64], chunkOffsets: [UInt64], runs: [(firstChunk: Int, samples: Int)])
+    -> [Range<UInt64>]?
+  {
+    var ranges: [Range<UInt64>] = []
+    ranges.reserveCapacity(sizes.count)
+    var sample = 0
+    for (index, run) in runs.enumerated() {
+      let firstChunk = run.firstChunk - 1
+      let endChunk = index + 1 < runs.count ? runs[index + 1].firstChunk - 1 : chunkOffsets.count
+      guard firstChunk >= 0, firstChunk <= endChunk, endChunk <= chunkOffsets.count, run.samples >= 0
+      else { return nil }
+      for chunk in firstChunk..<endChunk {
+        var offset = chunkOffsets[chunk]
+        for _ in 0..<run.samples {
+          guard sample < sizes.count else { return ranges }
+          ranges.append(offset..<(offset + sizes[sample]))
+          offset += sizes[sample]
+          sample += 1
+        }
+      }
+    }
+    return sample == sizes.count ? ranges : nil
+  }
+
+  private static func sampleRanges(_ stbl: Data) -> [Range<UInt64>]? {
+    guard let stsz = children(of: stbl, type: "stsz").first, stsz.count >= 12,
+      let stsc = children(of: stbl, type: "stsc").first, stsc.count >= 8
+    else { return nil }
+    let fixedSize = UInt64(uint32(stsz, at: 4))
+    let count = Int(uint32(stsz, at: 8))
+    let sizes: [UInt64]
+    if fixedSize != 0 {
+      // Nothing else in the box bounds the count of equally sized samples.
+      guard count <= maxFixedSizeSamples else { return nil }
+      sizes = Array(repeating: fixedSize, count: count)
+    } else {
+      guard stsz.count >= 12 + count * 4 else { return nil }
+      sizes = (0..<count).map { UInt64(uint32(stsz, at: 12 + $0 * 4)) }
+    }
+    var offsets: [UInt64]
+    if let stco = children(of: stbl, type: "stco").first, stco.count >= 8 {
+      let chunks = Int(uint32(stco, at: 4))
+      guard stco.count >= 8 + chunks * 4 else { return nil }
+      offsets = (0..<chunks).map { UInt64(uint32(stco, at: 8 + $0 * 4)) }
+    } else if let co64 = children(of: stbl, type: "co64").first, co64.count >= 8 {
+      let chunks = Int(uint32(co64, at: 4))
+      guard co64.count >= 8 + chunks * 8 else { return nil }
+      offsets = (0..<chunks).map {
+        UInt64(uint32(co64, at: 8 + $0 * 8)) << 32 | UInt64(uint32(co64, at: 12 + $0 * 8))
+      }
+    } else {
+      return nil
+    }
+    let runCount = Int(uint32(stsc, at: 4))
+    guard stsc.count >= 8 + runCount * 12 else { return nil }
+    let runs = (0..<runCount).map {
+      (firstChunk: Int(uint32(stsc, at: 8 + $0 * 12)), samples: Int(uint32(stsc, at: 12 + $0 * 12)))
+    }
+    return sampleRanges(sizes: sizes, chunkOffsets: offsets, runs: runs)
+  }
+
+  private static func trackID(of trak: Data) -> Int? {
+    guard let header = children(of: trak, type: "tkhd").first else { return nil }
+    let idOffset = header.first == 1 ? 20 : 12
+    guard header.count >= idOffset + 4 else { return nil }
+    return Int(uint32(header, at: idOffset))
   }
 
   private static func soundTrack(_ trak: Data) -> Track? {

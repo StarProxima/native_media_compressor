@@ -10,6 +10,7 @@ struct MediaAsset {
     let nominalFrameRate: Float
     let format: CMFormatDescription?
     let dataRate: Float
+    let timeRange: CMTimeRange
 
     var displaySize: CGSize { MediaAsset.displaySize(naturalSize, transform) }
 
@@ -82,12 +83,12 @@ struct MediaAsset {
       let (duration, groups) = try await asset.load(.duration, .trackGroups)
       var video: VideoTrack?
       if let track = try await asset.loadTracks(withMediaType: .video).first {
-        let (size, transform, rate, formats, dataRate) = try await track.load(
+        let (size, transform, rate, formats, dataRate, timeRange) = try await track.load(
           .naturalSize, .preferredTransform, .nominalFrameRate, .formatDescriptions,
-          .estimatedDataRate)
+          .estimatedDataRate, .timeRange)
         video = VideoTrack(
           track: track, naturalSize: size, transform: transform, nominalFrameRate: rate,
-          format: formats.first, dataRate: dataRate)
+          format: formats.first, dataRate: dataRate, timeRange: timeRange)
       }
       var audio: [AudioTrack] = []
       for track in try await asset.loadTracks(withMediaType: .audio) {
@@ -102,7 +103,7 @@ struct MediaAsset {
     try await loadValues(of: asset, keys: ["duration", "tracks", "trackGroups"])
     let trackKeys = [
       "naturalSize", "preferredTransform", "nominalFrameRate", "formatDescriptions",
-      "estimatedDataRate", "enabled",
+      "estimatedDataRate", "enabled", "timeRange",
     ]
     var video: VideoTrack?
     if let track = asset.tracks(withMediaType: .video).first {
@@ -110,7 +111,7 @@ struct MediaAsset {
       video = VideoTrack(
         track: track, naturalSize: track.naturalSize, transform: track.preferredTransform,
         nominalFrameRate: track.nominalFrameRate, format: firstFormat(of: track),
-        dataRate: track.estimatedDataRate)
+        dataRate: track.estimatedDataRate, timeRange: track.timeRange)
     }
     var audio: [AudioTrack] = []
     for track in asset.tracks(withMediaType: .audio) {
@@ -140,12 +141,36 @@ struct MediaAsset {
       isHdr: video.isHDR,
       hasAudio: !media.audio.isEmpty || !media.unreadableAudio.isEmpty,
       audioCodec: media.audioPlan.firstCodec ?? media.audio.first?.codec
-        ?? media.unreadableAudio.first?.codec)
+        ?? media.unreadableAudio.first?.codec,
+      frameRate: video.nominalFrameRate > 0 ? Double(video.nominalFrameRate) : nil)
   }
 
   static func displaySize(_ size: CGSize, _ transform: CGAffineTransform) -> CGSize {
     let rect = CGRect(origin: .zero, size: size).applying(transform)
     return CGSize(width: abs(rect.width), height: abs(rect.height))
+  }
+
+  /// `transform` followed by `quarterTurns` clockwise quarter turns, with the
+  /// translation redone so a `size` frame lands at the origin.
+  ///
+  /// Only the rotation and mirroring of `transform` are kept: its translation
+  /// is in the units of the source frame, not of the scaled output.
+  static func orientation(_ transform: CGAffineTransform, turnedBy quarterTurns: Int, size: CGSize)
+    -> CGAffineTransform
+  {
+    // Exact matrices: a rotation built from an angle leaves 6e-17 where 0
+    // belongs. In the y-down frame of video, (0, 1, -1, 0) turns clockwise.
+    let turns: [CGAffineTransform] = [
+      .identity,
+      CGAffineTransform(a: 0, b: 1, c: -1, d: 0, tx: 0, ty: 0),
+      CGAffineTransform(a: -1, b: 0, c: 0, d: -1, tx: 0, ty: 0),
+      CGAffineTransform(a: 0, b: -1, c: 1, d: 0, tx: 0, ty: 0),
+    ]
+    let linear = CGAffineTransform(
+      a: transform.a, b: transform.b, c: transform.c, d: transform.d, tx: 0, ty: 0)
+    let turned = linear.concatenating(turns[(quarterTurns % 4 + 4) % 4])
+    let bounds = CGRect(origin: .zero, size: size).applying(turned)
+    return turned.concatenating(CGAffineTransform(translationX: -bounds.minX, y: -bounds.minY))
   }
 
   private static func loadValues(of object: AVAsynchronousKeyValueLoading, keys: [String])
