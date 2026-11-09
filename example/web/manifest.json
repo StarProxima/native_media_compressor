@@ -1,12 +1,12 @@
 {
-    "name": "native_media_compressor_example",
-    "short_name": "native_media_compressor_example",
+    "name": "native_media_compressor demo",
+    "short_name": "Media Compressor",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "Demonstrates how to use the native_media_compressor plugin.",
-    "orientation": "portrait-primary",
+    "background_color": "#4F46E5",
+    "theme_color": "#4F46E5",
+    "description": "Compress video and images with the codecs your platform already ships. No ffmpeg.",
+    "orientation": "any",
     "prefer_related_applications": false,
     "icons": [
         {
