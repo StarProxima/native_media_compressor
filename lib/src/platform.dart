@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 
 import 'messages.g.dart' as pigeon;
+import 'planning.dart';
 import 'types.dart';
 
 /// Platform implementation of `native_media_compressor`.
@@ -83,7 +84,7 @@ class PigeonMediaCompressor extends NativeMediaCompressorPlatform
       destination: destination,
       maxShortSide: options.maxShortSide,
       maxLongSide: options.maxLongSide,
-      videoBitrate: options.videoBitrate,
+      videoBitrate: VideoPlanning.videoBitrate(null, options),
       maxFrameRate: options.maxFrameRate?.clamp(1, _maxFrameRate),
       maxBytes: options.maxBytes,
       includeAudio: options.includeAudio,

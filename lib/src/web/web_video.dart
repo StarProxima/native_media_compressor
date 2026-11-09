@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:web/web.dart' as web;
 
+import '../planning.dart';
 import '../types.dart';
 import 'browser.dart';
 import 'media_plan.dart';
@@ -395,7 +396,7 @@ final class WebVideoJob {
         codec: codec,
         width: width,
         height: height,
-        bitrate: options.videoBitrate,
+        bitrate: VideoPlanning.videoBitrate(null, options),
         framerate: frameRate,
         avc: web.AvcEncoderConfig(format: 'avc'),
       );
