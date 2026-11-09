@@ -142,6 +142,7 @@ void HandleCompressImage(NmcImageRequest* request,
   job.bounds.max_long_side = Optional(nmc_image_request_get_max_long_side(request));
   job.format = nmc_image_request_get_format(request);
   job.quality = nmc_image_request_get_quality(request);
+  job.keep_metadata = nmc_image_request_get_keep_metadata(request);
   auto response = Retain(response_handle);
   RunInBackground([job, response] {
     const nmc::Outcome outcome = nmc::CompressImageFile(job);
@@ -280,9 +281,16 @@ void GuardedVideoThumbnail(NmcThumbnailRequest* request,
   }
 }
 
+// Linux has no background execution limits to work around.
+NmcMediaCompressorHostApiSetForegroundNotificationResponse* HandleSetForegroundNotification(
+    NmcForegroundNotification*, gpointer) {
+  return nmc_media_compressor_host_api_set_foreground_notification_response_new();
+}
+
 const NmcMediaCompressorHostApiVTable kHostApi = {
     GuardedCompressVideo, GuardedCompressImage, GuardedCancel,
     GuardedProbeImage,    GuardedProbeVideo,    GuardedVideoThumbnail,
+    HandleSetForegroundNotification,
 };
 
 }  // namespace

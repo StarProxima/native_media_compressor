@@ -3,6 +3,7 @@
 #include <glib/gstdio.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <condition_variable>
 #include <cstdint>
 #include <memory>
@@ -11,6 +12,7 @@
 #include <vector>
 
 #include "image_codec.h"
+#include "jpeg_exif.h"
 #include "media_common.h"
 #include "video_queue.h"
 #include "video_transcoder.h"
@@ -91,21 +93,42 @@ GdkPixbuf* SolidPixbuf(int width, int height, bool alpha, guint32 rgba) {
   return pixbuf;
 }
 
-std::string SaveJpegWithOrientation(const std::string& name, int width, int height,
-                                    uint8_t orientation) {
+// APP1 segment holding a little-endian EXIF block with a Make of "NMC" and
+// the orientation tag.
+std::vector<uint8_t> LittleEndianExifSegment(uint8_t orientation) {
+  std::vector<uint8_t> segment = {0xFF, 0xE1, 0x00, 46};
+  Append(segment, std::string("Exif\0\0", 6));
+  segment.insert(segment.end(), {'I', 'I', 0x2A, 0x00, 0x08, 0x00, 0x00, 0x00, 0x02, 0x00});
+  segment.insert(segment.end(), {0x0F, 0x01, 0x02, 0x00, 0x04, 0x00, 0x00, 0x00, 'N', 'M', 'C', 0});
+  segment.insert(segment.end(), {0x12, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, orientation,
+                                 0x00, 0x00, 0x00});
+  segment.insert(segment.end(), {0x00, 0x00, 0x00, 0x00});
+  return segment;
+}
+
+std::string SaveJpegWithSegment(const std::string& name, int width, int height,
+                                const std::vector<uint8_t>& segment) {
   const std::string plain = TempPath(name + "-plain.jpg");
   GdkPixbuf* pixbuf = SolidPixbuf(width, height, false, 0x3366CCFF);
   gdk_pixbuf_save(pixbuf, plain.c_str(), "jpeg", nullptr, nullptr);
   g_object_unref(pixbuf);
   std::vector<uint8_t> jpeg = ReadBytes(plain);
-  std::vector<uint8_t> rotated = {0xFF, 0xD8};
-  const std::vector<uint8_t> exif = ExifSegment(orientation);
-  rotated.insert(rotated.end(), exif.begin(), exif.end());
-  rotated.insert(rotated.end(), jpeg.begin() + 2, jpeg.end());
+  std::vector<uint8_t> tagged = {0xFF, 0xD8};
+  tagged.insert(tagged.end(), segment.begin(), segment.end());
+  tagged.insert(tagged.end(), jpeg.begin() + 2, jpeg.end());
   const std::string path = TempPath(name + ".jpg");
-  WriteBytes(path, rotated);
+  WriteBytes(path, tagged);
   RemoveFile(plain);
   return path;
+}
+
+std::string SaveJpegWithOrientation(const std::string& name, int width, int height,
+                                    uint8_t orientation) {
+  return SaveJpegWithSegment(name, width, height, ExifSegment(orientation));
+}
+
+bool Contains(const std::vector<uint8_t>& bytes, const std::string& text) {
+  return std::search(bytes.begin(), bytes.end(), text.begin(), text.end()) != bytes.end();
 }
 
 }  // namespace
@@ -448,6 +471,139 @@ TEST(CompressImageFile, LeavesADirectoryDestinationAlone) {
   EXPECT_TRUE(g_file_test(target.c_str(), G_FILE_TEST_IS_DIR));
   EXPECT_EQ(DirectoryEntries(directory), 2);
   RemoveDirectory(directory);
+}
+
+TEST(CompressImageFile, KeepsExifWithNormalOrientationOnRequest) {
+  const std::string source = SaveJpegWithSegment("exif", 160, 120, LittleEndianExifSegment(6));
+  ImageJob job;
+  job.source = source;
+  job.destination = TempPath("exif-out.jpg");
+  job.bounds.max_long_side = 80;
+
+  ASSERT_EQ(CompressImageFile(job).status, NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_COMPRESSED);
+  EXPECT_FALSE(Contains(ReadBytes(job.destination), "NMC"));
+
+  job.keep_metadata = true;
+  const Outcome outcome = CompressImageFile(job);
+  ASSERT_EQ(outcome.status, NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_COMPRESSED) << outcome.message;
+  EXPECT_EQ(outcome.size_bytes, FileSize(job.destination));
+  EXPECT_TRUE(Contains(ReadBytes(job.destination), "NMC"));
+  EXPECT_EQ(ReadJpegOrientation(job.destination), 1);
+  const std::optional<ImageInfo> written = ProbeImageFile(job.destination);
+  ASSERT_TRUE(written.has_value());
+  EXPECT_EQ(written->width, 60);
+  EXPECT_EQ(written->height, 80);
+  RemoveFile(source);
+  RemoveFile(job.destination);
+}
+
+TEST(CompressImageFile, WritesWebpAndHeicOnlyWithAnEncoder) {
+  const std::string directory = MakeDirectory();
+  const std::string source = SaveJpegWithOrientation("modern", 160, 120, 1);
+  const struct {
+    NmcImageFormat format;
+    const char* mime;
+  } kCases[] = {
+      {NATIVE_MEDIA_COMPRESSOR_IMAGE_FORMAT_WEBP, "image/webp"},
+      {NATIVE_MEDIA_COMPRESSOR_IMAGE_FORMAT_HEIC, "image/heic"},
+  };
+  for (const auto& test_case : kCases) {
+    ImageJob job;
+    job.source = source;
+    job.destination = directory + "/out";
+    job.bounds.max_long_side = 80;
+    job.format = test_case.format;
+    const Outcome outcome = CompressImageFile(job);
+    if (outcome.status == NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_COMPRESSED) {
+      EXPECT_EQ(SniffImageMime(job.destination), test_case.mime);
+      EXPECT_EQ(outcome.width, 80);
+      EXPECT_EQ(outcome.height, 60);
+      RemoveFile(job.destination);
+    } else {
+      EXPECT_EQ(outcome.status, NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_UNSUPPORTED)
+          << test_case.mime << ": " << outcome.message;
+    }
+    EXPECT_EQ(DirectoryEntries(directory), 0) << test_case.mime;
+  }
+  RemoveFile(source);
+  RemoveDirectory(directory);
+}
+
+TEST(FindJpegExifSegment, ReturnsTheWholeApp1Segment) {
+  const std::vector<uint8_t> exif = LittleEndianExifSegment(3);
+  std::vector<uint8_t> jpeg = {0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x04, 0x00, 0x00};
+  jpeg.insert(jpeg.end(), exif.begin(), exif.end());
+  jpeg.insert(jpeg.end(), {0xFF, 0xDA, 0x00, 0x02});
+  EXPECT_EQ(FindJpegExifSegment(jpeg.data(), jpeg.size()), exif);
+}
+
+TEST(FindJpegExifSegment, IgnoresJpegsWithoutExif) {
+  std::vector<uint8_t> xmp = {0xFF, 0xD8, 0xFF, 0xE1, 0x00, 0x08};
+  Append(xmp, "http:/");
+  xmp.insert(xmp.end(), {0xFF, 0xDA, 0x00, 0x02});
+  EXPECT_TRUE(FindJpegExifSegment(xmp.data(), xmp.size()).empty());
+
+  const std::vector<uint8_t> png = {0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A};
+  EXPECT_TRUE(FindJpegExifSegment(png.data(), png.size()).empty());
+  EXPECT_TRUE(FindJpegExifSegment(nullptr, 0).empty());
+}
+
+TEST(FindJpegExifSegment, RejectsATruncatedSegment) {
+  std::vector<uint8_t> jpeg = {0xFF, 0xD8};
+  const std::vector<uint8_t> exif = LittleEndianExifSegment(6);
+  jpeg.insert(jpeg.end(), exif.begin(), exif.end() - 10);
+  EXPECT_TRUE(FindJpegExifSegment(jpeg.data(), jpeg.size()).empty());
+}
+
+TEST(ResetExifOrientation, PatchesBigEndianTiff) {
+  std::vector<uint8_t> segment = ExifSegment(8);
+  ASSERT_TRUE(ResetExifOrientation(&segment));
+  EXPECT_EQ(segment[28], 0x00);
+  EXPECT_EQ(segment[29], 0x01);
+  EXPECT_EQ(segment[30], 0x00);
+}
+
+TEST(ResetExifOrientation, PatchesLittleEndianTiffAndKeepsOtherTags) {
+  std::vector<uint8_t> segment = LittleEndianExifSegment(6);
+  std::vector<uint8_t> expected = segment;
+  expected[40] = 0x01;
+  ASSERT_TRUE(ResetExifOrientation(&segment));
+  EXPECT_EQ(segment, expected);
+
+  const std::string path = SaveJpegWithSegment("reset", 8, 4, segment);
+  EXPECT_EQ(ReadJpegOrientation(path), 1);
+  RemoveFile(path);
+}
+
+TEST(ResetExifOrientation, RejectsUnreadableTiff) {
+  std::vector<uint8_t> overlong = LittleEndianExifSegment(6);
+  overlong[18] = 3;
+  EXPECT_FALSE(ResetExifOrientation(&overlong));
+
+  std::vector<uint8_t> truncated = LittleEndianExifSegment(6);
+  truncated.resize(30);
+  EXPECT_FALSE(ResetExifOrientation(&truncated));
+
+  std::vector<uint8_t> unknown_order = LittleEndianExifSegment(6);
+  unknown_order[10] = 'X';
+  unknown_order[11] = 'X';
+  EXPECT_FALSE(ResetExifOrientation(&unknown_order));
+
+  std::vector<uint8_t> far_ifd = LittleEndianExifSegment(6);
+  far_ifd[14] = 0xF0;
+  EXPECT_FALSE(ResetExifOrientation(&far_ifd));
+
+  std::vector<uint8_t> tiny = {0xFF, 0xE1, 0x00, 0x08};
+  Append(tiny, std::string("Exif\0\0", 6));
+  EXPECT_FALSE(ResetExifOrientation(&tiny));
+}
+
+TEST(InsertAfterSoi, PutsTheSegmentFirst) {
+  const std::vector<uint8_t> jpeg = {0xFF, 0xD8, 0xFF, 0xE0, 0xFF, 0xD9};
+  const std::vector<uint8_t> segment = {0xFF, 0xE1, 0x00, 0x02};
+  EXPECT_EQ(InsertAfterSoi(jpeg, segment),
+            (std::vector<uint8_t>{0xFF, 0xD8, 0xFF, 0xE1, 0x00, 0x02, 0xFF, 0xE0, 0xFF, 0xD9}));
+  EXPECT_TRUE(InsertAfterSoi({'R', 'I', 'F', 'F'}, segment).empty());
 }
 
 TEST(PendingOutput, SitsNextToTheDestinationWithItsExtension) {

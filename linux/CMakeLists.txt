@@ -25,6 +25,7 @@ endif()
 list(APPEND PLUGIN_SOURCES
   "gst_api.cc"
   "image_codec.cc"
+  "jpeg_exif.cc"
   "media_common.cc"
   "messages.g.cc"
   "native_media_compressor_plugin.cc"
