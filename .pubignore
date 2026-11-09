@@ -25,6 +25,7 @@ build/
 
 # Development only: test media, generators and agent rules.
 /example/integration_test/fixtures/
+/example/assets/samples/
 /tool/
 /AGENTS.md
 /CLAUDE.md

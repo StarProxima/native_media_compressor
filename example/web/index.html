@@ -1,46 +1,38 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <!--
-    If you are serving your web app in a path other than the root, change the
-    href value below to reflect the base path you are serving from.
-
-    The path provided below has to start and end with a slash "/" in order for
-    it to work correctly.
-
-    For more details:
-    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
-
-    This is a placeholder for base href that will be replaced by the value of
-    the `--base-href` argument provided to `flutter build`.
+    Replaced by the value of the `--base-href` argument of `flutter build`,
+    for example /native_media_compressor/ on GitHub Pages.
   -->
   <base href="$FLUTTER_BASE_HREF">
 
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
-  <meta name="description" content="Demonstrates how to use the native_media_compressor plugin.">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Compress video and images in the browser with the codecs your platform already ships. A live demo of the native_media_compressor Flutter plugin: no ffmpeg, files never leave your device.">
+  <meta name="theme-color" content="#4F46E5">
+
+  <meta property="og:title" content="native_media_compressor demo">
+  <meta property="og:description" content="Compress video and images with the codecs your platform already ships. No ffmpeg.">
+  <meta property="og:type" content="website">
 
   <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
-  <meta name="apple-mobile-web-app-title" content="native_media_compressor_example">
+  <meta name="apple-mobile-web-app-title" content="Media Compressor">
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
 
-  <!-- Favicon -->
   <link rel="icon" type="image/png" href="favicon.png"/>
 
-  <title>native_media_compressor_example</title>
+  <title>native_media_compressor · demo</title>
   <link rel="manifest" href="manifest.json">
+  <style>
+    body { margin: 0; background: #fcf8ff; }
+    @media (prefers-color-scheme: dark) { body { background: #131318; } }
+  </style>
 </head>
 <body>
-  <!--
-    You can customize the "flutter_bootstrap.js" script.
-    This is useful to provide a custom configuration to the Flutter loader
-    or to give the user feedback during the initialization process.
-
-    For more details:
-    * https://docs.flutter.dev/platform-integration/web/initialization
-  -->
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>
