@@ -47,7 +47,7 @@ What each platform needs and where it says `unsupported` is listed under [Platfo
 
 ## Supported formats
 
-Output is always the same: video becomes H.264 in MP4 with AAC audio, images become JPEG or PNG. What can be read depends on the decoders the system has. The tables below are what CI checks on every platform with one sample file per container, codec and image format: an Android 14 emulator, the current iOS simulator and macOS, Windows Server 2025 without Store extensions, Ubuntu with the GStreamer packages from [Platform notes](#platform-notes), and Chrome. A format the platform cannot read returns `unsupported`, never `failed`.
+Output is always the same: video becomes H.264 in MP4 with AAC audio, images become JPEG or PNG. What can be read depends on the decoders the system has. The tables below are what CI checks on every platform with one sample file per container, codec and image format: an Android 15 emulator, the current iOS simulator and macOS, Windows Server 2025 without Store extensions, Ubuntu with the GStreamer packages from [Platform notes](#platform-notes), and Chrome. A format the platform cannot read returns `unsupported`, never `failed`.
 
 ### Video input
 
