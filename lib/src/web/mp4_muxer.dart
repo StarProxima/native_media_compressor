@@ -20,32 +20,35 @@ final class _Track {
     required this.width,
     required this.height,
     required this.timescale,
-    required Uint8List avcC,
+    required this.config,
+    required this.isHevc,
     required this.rotation,
   }) : isVideo = true,
-       config = avcC,
        channelCount = 0,
        sampleRate = 0,
        editMediaTime = 0;
 
-  _Track.audio(Mp4Track source)
-    : isVideo = false,
-      width = 0,
-      height = 0,
-      rotation = 0,
-      timescale = source.timescale,
-      config = source.esds!,
-      channelCount = source.channelCount,
-      sampleRate = source.sampleRate,
-      editMediaTime = source.editMediaTime;
+  _Track.audio({
+    required this.timescale,
+    required this.config,
+    required this.channelCount,
+    required this.sampleRate,
+    required this.editMediaTime,
+  }) : isVideo = false,
+       isHevc = false,
+       width = 0,
+       height = 0,
+       rotation = 0;
 
   final bool isVideo;
+  final bool isHevc;
   final int width;
   final int height;
   final int rotation;
   final int timescale;
 
-  /// The `avcC` payload of a video track, the complete `esds` box of audio.
+  /// The `avcC` or `hvcC` payload of a video track, the complete `esds` box
+  /// of audio.
   final Uint8List config;
   final int channelCount;
   final int sampleRate;
@@ -75,8 +78,8 @@ final class _Track {
   }
 }
 
-/// Writes H.264 video and copied audio samples into an MP4 file with the
-/// movie box before the media data, so playback can start while loading.
+/// Writes H.264 or HEVC video and AAC audio samples into an MP4 file with
+/// the movie box before the media data, so playback can start while loading.
 final class Mp4Muxer {
   static const _movieTimescale = 1000;
   static const _chunkSeconds = 1;
@@ -85,14 +88,16 @@ final class Mp4Muxer {
   final _tracks = <_Track>[];
   var _mediaBytes = 0;
 
-  /// Adds the H.264 track; [width] and [height] are the stored frame size
-  /// and [rotation] the clockwise rotation players apply.
+  /// Adds the video track with its `avcC` or, for [hevc], `hvcC` payload
+  /// [config]; [width] and [height] are the stored frame size and [rotation]
+  /// the clockwise rotation players apply.
   void setVideo({
     required int width,
     required int height,
     required int timescale,
-    required Uint8List avcC,
+    required Uint8List config,
     required int rotation,
+    bool hevc = false,
   }) {
     _tracks.insert(
       0,
@@ -100,16 +105,42 @@ final class Mp4Muxer {
         width: width,
         height: height,
         timescale: timescale,
-        avcC: avcC,
+        config: config,
+        isHevc: hevc,
         rotation: rotation,
       ),
     );
   }
 
   /// Adds an audio track copied from [source], which must carry an `esds`.
+  /// [editMediaTime] replaces the source's start when part of it is cut.
   /// Returns the index for [addAudioSample].
-  int addAudio(Mp4Track source) {
-    _tracks.add(_Track.audio(source));
+  int addAudio(Mp4Track source, {int? editMediaTime}) => addAacAudio(
+    timescale: source.timescale,
+    esds: source.esds!,
+    channelCount: source.channelCount,
+    sampleRate: source.sampleRate,
+    editMediaTime: editMediaTime ?? source.editMediaTime,
+  );
+
+  /// Adds an AAC track described by the complete `esds` box [esds].
+  /// Returns the index for [addAudioSample].
+  int addAacAudio({
+    required int timescale,
+    required Uint8List esds,
+    required int channelCount,
+    required int sampleRate,
+    int editMediaTime = 0,
+  }) {
+    _tracks.add(
+      _Track.audio(
+        timescale: timescale,
+        config: esds,
+        channelCount: channelCount,
+        sampleRate: sampleRate,
+        editMediaTime: editMediaTime,
+      ),
+    );
     return _tracks.length - 1;
   }
 
@@ -403,7 +434,7 @@ final class Mp4Muxer {
       w.fullBox('stsd', 0, 0, (w) {
         w.u32(1);
         if (track.isVideo) {
-          w.box('avc1', (w) {
+          w.box(track.isHevc ? 'hvc1' : 'avc1', (w) {
             w
               ..zeros(6)
               ..u16(1)
@@ -417,7 +448,10 @@ final class Mp4Muxer {
               ..zeros(32)
               ..u16(0x18)
               ..u16(0xffff)
-              ..box('avcC', (w) => w.bytes(track.config));
+              ..box(
+                track.isHevc ? 'hvcC' : 'avcC',
+                (w) => w.bytes(track.config),
+              );
           });
         } else {
           w.box('mp4a', (w) {

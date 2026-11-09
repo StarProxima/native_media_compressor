@@ -85,6 +85,48 @@ abstract final class MediaPlan {
     final level = avcLevel(width, height, frameRate).toRadixString(16);
     return ['avc1.6400$level', 'avc1.4d00$level', 'avc1.4200$level'];
   }
+
+  /// HEVC levels as `general_level_idc` (30 times the level number) with
+  /// their luma picture size and luma sample rate limits.
+  static const _hevcLevels = [
+    (30, 36864, 552960),
+    (60, 122880, 3686400),
+    (63, 245760, 7372800),
+    (90, 552960, 16588800),
+    (93, 983040, 33177600),
+    (120, 2228224, 66846720),
+    (123, 2228224, 133693440),
+    (150, 8912896, 267386880),
+    (153, 8912896, 534773760),
+    (156, 8912896, 1069547520),
+    (180, 35651584, 1069547520),
+    (183, 35651584, 2139095040),
+    (186, 35651584, 4278190080),
+  ];
+
+  /// Smallest HEVC `general_level_idc` whose limits fit the stream.
+  static int hevcLevel(int width, int height, double frameRate) {
+    final samples = width * height;
+    final rate = samples * (frameRate <= 0 ? 30 : frameRate);
+    for (final (level, maxSize, maxRate) in _hevcLevels) {
+      if (samples <= maxSize && rate <= maxRate) return level;
+    }
+    return _hevcLevels.last.$1;
+  }
+
+  /// WebCodecs codec strings for HEVC Main, `hvc1` first: players on Apple
+  /// platforms only accept HEVC whose parameter sets sit in the sample entry.
+  static List<String> hevcCodecs(int width, int height, double frameRate) {
+    final level = hevcLevel(width, height, frameRate);
+    return ['hvc1.1.6.L$level.B0', 'hev1.1.6.L$level.B0'];
+  }
+
+  /// Average frame rate of [sampleCount] frames over [duration] ticks of
+  /// [timescale], or null when the track does not say how long it is.
+  static double? frameRate(int sampleCount, int duration, int timescale) {
+    if (sampleCount <= 0 || duration <= 0 || timescale <= 0) return null;
+    return sampleCount * timescale / duration;
+  }
 }
 
 /// Drops frames so that at most one falls into each `1 / maxFrameRate`
