@@ -51,6 +51,7 @@ class NativeMediaCompressorPlugin : FlutterPlugin, MediaCompressorHostApi {
         // task neither reports progress under the id nor unregisters the new one.
         val cancelled = AtomicBoolean(false)
         videoTasks[taskId] = cancelled
+        VideoForegroundService.videoStarted(context)
         requireNotNull(videoExecutor).execute {
             val reply = guard {
                 VideoTranscoder(
@@ -58,12 +59,16 @@ class NativeMediaCompressorPlugin : FlutterPlugin, MediaCompressorHostApi {
                     request = request,
                     isCancelled = cancelled::get,
                     onProgress = { progress ->
-                        main.post { if (videoTasks[taskId] === cancelled) sendProgress(taskId, progress) }
+                        main.post {
+                            VideoForegroundService.videoProgress(progress)
+                            if (videoTasks[taskId] === cancelled) sendProgress(taskId, progress)
+                        }
                     },
                 ).run()
             }
             val ownsId = videoTasks.remove(taskId, cancelled)
             main.post {
+                VideoForegroundService.videoFinished(context)
                 if (ownsId && reply.status == CompressionStatus.COMPRESSED) sendProgress(taskId, 1.0)
                 callback(Result.success(reply))
             }
@@ -100,6 +105,10 @@ class NativeMediaCompressorPlugin : FlutterPlugin, MediaCompressorHostApi {
             val probe = runCatching { VideoProber.probe(MediaSource(context, source)) }.getOrNull()
             main.post { callback(Result.success(probe)) }
         }
+    }
+
+    override fun setForegroundNotification(notification: ForegroundNotification?) {
+        VideoForegroundService.configure(context, notification)
     }
 
     private fun sendProgress(taskId: Long, progress: Double) {

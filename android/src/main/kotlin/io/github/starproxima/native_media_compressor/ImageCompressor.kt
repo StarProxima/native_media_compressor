@@ -12,6 +12,9 @@ import java.io.IOException
 
 internal class ImageCompressor(private val source: MediaSource, private val request: ImageRequest) {
     fun run(): CompressionReply {
+        BitmapOutput.unsupportedReason(request.format)?.let {
+            return CompressionReply(CompressionStatus.UNSUPPORTED, message = it)
+        }
         val output = try {
             StagedOutput.create(request.destination)
         } catch (error: IOException) {
@@ -38,7 +41,19 @@ internal class ImageCompressor(private val source: MediaSource, private val requ
             val status = if (cannotDecode(mimeType)) CompressionStatus.UNSUPPORTED else CompressionStatus.FAILED
             return CompressionReply(status, message = "${mimeType ?: "unknown format"}: $error")
         }
-        return BitmapOutput.write(decoded, request.format, request.quality, destination)
+        val reply = BitmapOutput.write(decoded, request.format, request.quality, destination)
+        if (reply.status != CompressionStatus.COMPRESSED || !request.keepMetadata) return reply
+        if (!ExifMetadata.canWrite(request.format)) return reply
+        val size = Size(requireNotNull(reply.width).toInt(), requireNotNull(reply.height).toInt())
+        try {
+            ExifMetadata.copy(source, destination, size)
+        } catch (error: Exception) {
+            // PNG and WebP metadata is best effort; ExifInterface restores the file when saving fails.
+            if (request.format == ImageFormat.JPEG) {
+                return CompressionReply(CompressionStatus.FAILED, message = "cannot write the metadata: $error")
+            }
+        }
+        return reply.copy(sizeBytes = destination.length())
     }
 
     @TargetApi(Build.VERSION_CODES.P)

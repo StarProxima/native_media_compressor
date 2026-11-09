@@ -28,7 +28,7 @@ enum CompressionStatus {
   failed,
 }
 
-enum ImageFormat { jpeg, png }
+enum ImageFormat { jpeg, png, webp, heic }
 
 /// Codec of the output video track.
 enum VideoCodec { h264, hevc }
@@ -99,6 +99,7 @@ class ImageRequest {
     required this.destination,
     required this.format,
     required this.quality,
+    required this.keepMetadata,
   });
 
   String source;
@@ -107,6 +108,24 @@ class ImageRequest {
   int? maxLongSide;
   ImageFormat format;
   int quality;
+
+  /// Copy EXIF and other metadata of the source, location included, except
+  /// the orientation, which is applied to the pixels.
+  bool keepMetadata;
+}
+
+/// The notification an Android foreground service shows while videos are
+/// compressed in it.
+class ForegroundNotification {
+  ForegroundNotification({required this.title, required this.channelName});
+
+  String title;
+  String? text;
+
+  /// Name of a drawable resource of the app for the small icon; null uses
+  /// the app icon.
+  String? iconResource;
+  String channelName;
 }
 
 class CompressionReply {
@@ -178,6 +197,11 @@ abstract class MediaCompressorHostApi {
 
   @async
   CompressionReply videoThumbnail(ThumbnailRequest request);
+
+  /// Runs later video compressions in an Android foreground service showing
+  /// [notification], or stops doing so when it is null. Other platforms
+  /// ignore it.
+  void setForegroundNotification(ForegroundNotification? notification);
 }
 
 @FlutterApi()

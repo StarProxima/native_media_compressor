@@ -15,6 +15,8 @@ struct ImageJob {
   SizeBounds bounds;
   NmcImageFormat format = NATIVE_MEDIA_COMPRESSOR_IMAGE_FORMAT_JPEG;
   int64_t quality = 85;
+  // Copies the EXIF of a JPEG source into a JPEG output; ignored otherwise.
+  bool keep_metadata = false;
 };
 
 struct ImageInfo {
@@ -27,8 +29,8 @@ struct ImageInfo {
 // Reads the displayed size, frame count and MIME type from the file header.
 std::optional<ImageInfo> ProbeImageFile(const std::string& path);
 
-// Decodes downsampled, applies EXIF orientation and writes JPEG or PNG. Blocks;
-// call off the platform thread.
+// Decodes downsampled, applies EXIF orientation and writes the requested
+// format. Blocks; call off the platform thread.
 Outcome CompressImageFile(const ImageJob& job);
 
 // Packed 8-bit RGB pixels, `stride` bytes per row.
@@ -39,8 +41,8 @@ struct RgbFrame {
   int stride = 0;
 };
 
-// Scales `frame` down to fit `bounds` and writes it to `output` as JPEG or
-// PNG, the way CompressImageFile writes a decoded image. Does not stage the
+// Scales `frame` down to fit `bounds` and writes it to `output` in `format`,
+// the way CompressImageFile writes a decoded image. Does not stage the
 // output; the caller owns the temporary file.
 Outcome WriteRgbFrame(const RgbFrame& frame, const SizeBounds& bounds, NmcImageFormat format,
                       int64_t quality, const std::string& output);

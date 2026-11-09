@@ -39,6 +39,8 @@ class NativeMediaCompressorPlugin : public flutter::Plugin, public MediaCompress
                   std::function<void(ErrorOr<std::optional<VideoProbe>> reply)> result) override;
   void VideoThumbnail(const ThumbnailRequest& request,
                       std::function<void(ErrorOr<CompressionReply> reply)> result) override;
+  std::optional<FlutterError> SetForegroundNotification(
+      const ForegroundNotification* notification) override;
 
  private:
   flutter::BinaryMessenger* messenger_;

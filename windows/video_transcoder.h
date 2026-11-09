@@ -7,6 +7,7 @@
 #include <optional>
 #include <string>
 
+#include "image_codec.h"
 #include "media_common.h"
 
 namespace native_media_compressor {
@@ -44,7 +45,7 @@ struct ThumbnailJob {
   std::wstring destination;
   int64_t position_ms = 0;
   SizeBounds bounds;
-  bool png = false;
+  ImageOutputFormat format = ImageOutputFormat::kJpeg;
   int quality = 85;
 };
 
@@ -72,9 +73,9 @@ Outcome TranscodeVideo(const VideoJob& job, const std::atomic<bool>& cancelled,
 // has no video track, cannot be read, or Media Foundation is missing.
 std::optional<VideoInfo> ProbeVideoFile(const std::wstring& source);
 
-// Decodes one frame, turns it upright and writes it as JPEG or PNG. Blocks;
-// call it from a worker thread. The destination is replaced only when the
-// status is compressed.
+// Decodes one frame, turns it upright and writes it in the job's format.
+// Blocks; call it from a worker thread. The destination is replaced only when
+// the status is compressed.
 Outcome SaveVideoFrame(const ThumbnailJob& job);
 
 // The kept range for the requested milliseconds, or null when it keeps

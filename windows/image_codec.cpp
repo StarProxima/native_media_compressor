@@ -3,20 +3,47 @@
 #include <windows.h>
 
 #include <wincodec.h>
+#include <wincodecsdk.h>
 #include <wrl/client.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cwchar>
 #include <cwctype>
 #include <initializer_list>
+#include <string>
 #include <vector>
 
 namespace native_media_compressor {
 namespace {
 
 using Microsoft::WRL::ComPtr;
+
+// Declared here rather than taken from wincodec.h, so that the build does not
+// depend on the SDK version declaring and exporting them.
+constexpr GUID kContainerFormatWebp = {
+    0xe094b0e2, 0x67f2, 0x45b3, {0xb0, 0xea, 0x11, 0x53, 0x37, 0xca, 0x7c, 0xf3}};
+constexpr GUID kContainerFormatHeif = {
+    0xe1e62521, 0x6787, 0x405b, {0xa3, 0x39, 0x50, 0x07, 0x15, 0xb5, 0x76, 0x3f}};
+
+GUID ContainerFormatOf(ImageOutputFormat format) {
+  switch (format) {
+    case ImageOutputFormat::kPng:
+      return GUID_ContainerFormatPng;
+    case ImageOutputFormat::kWebp:
+      return kContainerFormatWebp;
+    case ImageOutputFormat::kHeic:
+      return kContainerFormatHeif;
+    case ImageOutputFormat::kJpeg:
+      break;
+  }
+  return GUID_ContainerFormatJpeg;
+}
+
+constexpr wchar_t kExifOrientation[] = L"/app1/ifd/{ushort=274}";
+constexpr wchar_t kXmpOrientation[] = L"/xmp/tiff:Orientation";
 
 struct OpenedImage {
   ComPtr<IWICBitmapDecoder> decoder;
@@ -34,32 +61,98 @@ UINT ReadOrientation(IWICBitmapFrameDecode* frame) {
   // The photo policy name covers most containers; the raw EXIF paths are a
   // fallback for decoders that do not map it.
   for (const wchar_t* query :
-       {L"System.Photo.Orientation", L"/app1/ifd/{ushort=274}", L"/ifd/{ushort=274}"}) {
+       {L"System.Photo.Orientation", kExifOrientation, L"/ifd/{ushort=274}"}) {
     PROPVARIANT value;
     PropVariantInit(&value);
-    UINT orientation = 0;
-    if (SUCCEEDED(reader->GetMetadataByName(query, &value))) {
-      switch (value.vt) {
-        case VT_UI1:
-          orientation = value.bVal;
-          break;
-        case VT_UI2:
-          orientation = value.uiVal;
-          break;
-        case VT_UI4:
-          orientation = value.ulVal;
-          break;
-        case VT_I2:
-          orientation = static_cast<UINT>(value.iVal);
-          break;
-        default:
-          break;
-      }
-    }
+    std::optional<UINT> orientation;
+    if (SUCCEEDED(reader->GetMetadataByName(query, &value))) orientation = OrientationValue(value);
     PropVariantClear(&value);
-    if (orientation >= 1 && orientation <= 8) return orientation;
+    if (orientation) return *orientation;
   }
   return 1;
+}
+
+bool HasMetadata(IWICMetadataQueryReader* reader, const wchar_t* query) {
+  PROPVARIANT value;
+  PropVariantInit(&value);
+  const bool found = SUCCEEDED(reader->GetMetadataByName(query, &value));
+  PropVariantClear(&value);
+  return found;
+}
+
+// Decoders other than JPEG expose the EXIF directory under their own paths;
+// it is re-created as the JPEG one. S_FALSE when the source has none.
+HRESULT CopyExifDirectory(IWICImagingFactory* factory, IWICMetadataQueryReader* source,
+                          IWICMetadataQueryWriter* target) {
+  for (const wchar_t* query : {L"/ifd", L"/app1/ifd", L"/eXIf/ifd"}) {
+    PROPVARIANT found;
+    PropVariantInit(&found);
+    ComPtr<IWICMetadataQueryReader> directory;
+    if (SUCCEEDED(source->GetMetadataByName(query, &found)) && found.vt == VT_UNKNOWN &&
+        found.punkVal != nullptr) {
+      found.punkVal->QueryInterface(IID_PPV_ARGS(&directory));
+    }
+    PropVariantClear(&found);
+    if (!directory) continue;
+    ComPtr<IWICComponentFactory> components;
+    NMC_RETURN_HR_IF_FAILED(factory->QueryInterface(IID_PPV_ARGS(&components)));
+    ComPtr<IWICMetadataQueryWriter> copy;
+    NMC_RETURN_HR_IF_FAILED(
+        components->CreateQueryWriterFromReader(directory.Get(), nullptr, &copy));
+    PROPVARIANT value;
+    PropVariantInit(&value);
+    value.vt = VT_UNKNOWN;
+    value.punkVal = copy.Get();
+    return target->SetMetadataByName(L"/app1/ifd", &value);
+  }
+  return S_FALSE;
+}
+
+// The pixels are already upright, so a copied orientation has to read as
+// normal everywhere a reader may look, or the picture would turn twice.
+HRESULT MakeOrientationNormal(IWICMetadataQueryWriter* writer) {
+  if (HasMetadata(writer, kExifOrientation)) {
+    PROPVARIANT normal;
+    PropVariantInit(&normal);
+    normal.vt = VT_UI2;
+    normal.uiVal = 1;
+    NMC_RETURN_HR_IF_FAILED(writer->SetMetadataByName(kExifOrientation, &normal));
+  }
+  if (HasMetadata(writer, kXmpOrientation)) {
+    NMC_RETURN_HR_IF_FAILED(writer->RemoveMetadataByName(kXmpOrientation));
+  }
+  for (const wchar_t* query : {L"System.Photo.Orientation", kExifOrientation, kXmpOrientation}) {
+    PROPVARIANT value;
+    PropVariantInit(&value);
+    std::optional<UINT> orientation;
+    if (SUCCEEDED(writer->GetMetadataByName(query, &value))) orientation = OrientationValue(value);
+    PropVariantClear(&value);
+    if (orientation.value_or(1) != 1) return E_FAIL;
+  }
+  return S_OK;
+}
+
+HRESULT CopyMetadata(IWICImagingFactory* factory, IWICBitmapFrameDecode* source,
+                     IWICBitmapFrameEncode* target) {
+  ComPtr<IWICMetadataBlockReader> blocks;
+  GUID container = GUID_NULL;
+  if (SUCCEEDED(source->QueryInterface(IID_PPV_ARGS(&blocks))) &&
+      SUCCEEDED(blocks->GetContainerFormat(&container)) &&
+      container == GUID_ContainerFormatJpeg) {
+    // Within one container every metadata block, XMP included, is copied as
+    // it is.
+    ComPtr<IWICMetadataBlockWriter> block_writer;
+    NMC_RETURN_HR_IF_FAILED(target->QueryInterface(IID_PPV_ARGS(&block_writer)));
+    NMC_RETURN_HR_IF_FAILED(block_writer->InitializeFromBlockReader(blocks.Get()));
+  }
+  ComPtr<IWICMetadataQueryWriter> writer;
+  NMC_RETURN_HR_IF_FAILED(target->GetMetadataQueryWriter(&writer));
+  if (container != GUID_ContainerFormatJpeg) {
+    ComPtr<IWICMetadataQueryReader> reader;
+    if (FAILED(source->GetMetadataQueryReader(&reader))) return S_OK;
+    NMC_RETURN_HR_IF_FAILED(CopyExifDirectory(factory, reader.Get(), writer.Get()));
+  }
+  return MakeOrientationNormal(writer.Get());
 }
 
 std::string HeifBrand(const std::wstring& path) {
@@ -279,10 +372,98 @@ std::vector<BYTE> Reorient(const std::vector<BYTE>& stored, UINT width, UINT hei
   return shown;
 }
 
+bool NeedsEncoderExtension(ImageOutputFormat format) {
+  return format == ImageOutputFormat::kWebp || format == ImageOutputFormat::kHeic;
+}
+
+const char* FormatName(ImageOutputFormat format) {
+  switch (format) {
+    case ImageOutputFormat::kPng:
+      return "PNG";
+    case ImageOutputFormat::kWebp:
+      return "WebP";
+    case ImageOutputFormat::kHeic:
+      return "HEIC";
+    case ImageOutputFormat::kJpeg:
+      break;
+  }
+  return "JPEG";
+}
+
+// Sets `*metadata_failed` and fails when copying the metadata fails, so that
+// the caller can write the image again without it.
+Outcome WriteImage(IWICImagingFactory* factory, const ImageJob& job, IWICStream* stream,
+                   std::vector<BYTE>& pixels, const WICPixelFormatGUID& pixel_format, UINT stride,
+                   UINT width, UINT height, IWICBitmapFrameDecode* metadata_source,
+                   bool* metadata_failed) {
+  ComPtr<IWICBitmapEncoder> encoder;
+  if (const HRESULT result =
+          factory->CreateEncoder(ContainerFormatOf(job.format), nullptr, &encoder);
+      FAILED(result)) {
+    const std::string step = std::string("Finding a ") + FormatName(job.format) + " encoder";
+    return Outcome::Of(Status::kUnsupported, DescribeHresult(step.c_str(), result));
+  }
+  NMC_RETURN_IF_FAILED(encoder->Initialize(stream, WICBitmapEncoderNoCache),
+                       "Starting the encoder");
+  ComPtr<IWICBitmapFrameEncode> frame;
+  ComPtr<IPropertyBag2> options;
+  NMC_RETURN_IF_FAILED(encoder->CreateNewFrame(&frame, &options), "Creating the output frame");
+  if (job.format != ImageOutputFormat::kPng) {
+    PROPBAG2 option = {};
+    option.pstrName = const_cast<LPOLESTR>(L"ImageQuality");
+    VARIANT value = {};
+    value.vt = VT_R4;
+    value.fltVal = static_cast<FLOAT>(std::clamp(job.quality, 0, 100)) / 100.0f;
+    const HRESULT quality_result = options ? options->Write(1, &option, &value) : E_NOINTERFACE;
+    // Codec extensions need not take this option; their default quality is
+    // better than no image.
+    if (FAILED(quality_result) && job.format == ImageOutputFormat::kJpeg) {
+      return Outcome::Failed("Setting the JPEG quality", quality_result);
+    }
+  }
+  NMC_RETURN_IF_FAILED(frame->Initialize(options.Get()), "Initializing the output frame");
+  NMC_RETURN_IF_FAILED(frame->SetSize(width, height), "Setting the output size");
+  WICPixelFormatGUID encoder_format = pixel_format;
+  NMC_RETURN_IF_FAILED(frame->SetPixelFormat(&encoder_format), "Setting the pixel format");
+  if (metadata_source != nullptr) {
+    if (const HRESULT result = CopyMetadata(factory, metadata_source, frame.Get());
+        FAILED(result)) {
+      if (metadata_failed != nullptr) *metadata_failed = true;
+      return Outcome::Failed("Copying the metadata", result);
+    }
+  }
+  if (encoder_format == pixel_format) {
+    NMC_RETURN_IF_FAILED(frame->WritePixels(height, stride, static_cast<UINT>(pixels.size()),
+                                            pixels.data()),
+                         "Encoding the pixels");
+  } else {
+    // Codec extensions may take only pixel layouts of their own.
+    ComPtr<IWICBitmap> bitmap;
+    NMC_RETURN_IF_FAILED(
+        factory->CreateBitmapFromMemory(width, height, pixel_format, stride,
+                                        static_cast<UINT>(pixels.size()), pixels.data(), &bitmap),
+        "Copying the pixels");
+    ComPtr<IWICFormatConverter> converter;
+    NMC_RETURN_IF_FAILED(factory->CreateFormatConverter(&converter), "Creating a pixel converter");
+    NMC_RETURN_IF_FAILED(converter->Initialize(bitmap.Get(), encoder_format,
+                                               WICBitmapDitherTypeNone, nullptr, 0.0,
+                                               WICBitmapPaletteTypeCustom),
+                         "Converting the pixels for the encoder");
+    NMC_RETURN_IF_FAILED(frame->WriteSource(converter.Get(), nullptr), "Encoding the pixels");
+  }
+  NMC_RETURN_IF_FAILED(frame->Commit(), "Finishing the frame");
+  NMC_RETURN_IF_FAILED(encoder->Commit(), "Finishing the file");
+  return Outcome::Compressed(width, height);
+}
+
+// `metadata_source` is the decoded frame whose metadata goes into the output,
+// or null to write none.
 Outcome Encode(IWICImagingFactory* factory, const ImageJob& job, const std::wstring& output,
-               const std::vector<BYTE>& premultiplied, UINT width, UINT height) {
+               const std::vector<BYTE>& premultiplied, UINT width, UINT height,
+               IWICBitmapFrameDecode* metadata_source) {
+  const bool png = job.format == ImageOutputFormat::kPng;
   bool has_alpha = false;
-  if (job.png) {
+  if (png) {
     for (size_t index = 3; index < premultiplied.size(); index += 4) {
       if (premultiplied[index] != 255) {
         has_alpha = true;
@@ -290,9 +471,9 @@ Outcome Encode(IWICImagingFactory* factory, const ImageJob& job, const std::wstr
       }
     }
   }
-  const bool keep_alpha = job.png && has_alpha;
-  WICPixelFormatGUID format = keep_alpha ? GUID_WICPixelFormat32bppBGRA : GUID_WICPixelFormat24bppBGR;
-  const WICPixelFormatGUID requested_format = format;
+  const bool keep_alpha = png && has_alpha;
+  const WICPixelFormatGUID pixel_format =
+      keep_alpha ? GUID_WICPixelFormat32bppBGRA : GUID_WICPixelFormat24bppBGR;
   const UINT pixel_bytes = keep_alpha ? 4 : 3;
   const UINT stride = (width * pixel_bytes + 3) / 4 * 4;
   std::vector<BYTE> pixels(static_cast<size_t>(stride) * height);
@@ -316,41 +497,27 @@ Outcome Encode(IWICImagingFactory* factory, const ImageJob& job, const std::wstr
     }
   }
 
-  ComPtr<IWICStream> stream;
-  NMC_RETURN_IF_FAILED(factory->CreateStream(&stream), "Creating the output stream");
-  NMC_RETURN_IF_FAILED(stream->InitializeFromFilename(output.c_str(), GENERIC_WRITE),
-                       "Creating the output file");
-  ComPtr<IWICBitmapEncoder> encoder;
-  if (const HRESULT result = factory->CreateEncoder(
-          job.png ? GUID_ContainerFormatPng : GUID_ContainerFormatJpeg, nullptr, &encoder);
-      FAILED(result)) {
-    return Outcome::Of(Status::kUnsupported, DescribeHresult("Finding an encoder", result));
-  }
-  NMC_RETURN_IF_FAILED(encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache),
-                       "Starting the encoder");
-  ComPtr<IWICBitmapFrameEncode> frame;
-  ComPtr<IPropertyBag2> options;
-  NMC_RETURN_IF_FAILED(encoder->CreateNewFrame(&frame, &options), "Creating the output frame");
-  if (!job.png) {
-    PROPBAG2 option = {};
-    option.pstrName = const_cast<LPOLESTR>(L"ImageQuality");
-    VARIANT value = {};
-    value.vt = VT_R4;
-    value.fltVal = static_cast<FLOAT>(std::clamp(job.quality, 0, 100)) / 100.0f;
-    NMC_RETURN_IF_FAILED(options->Write(1, &option, &value), "Setting the JPEG quality");
-  }
-  NMC_RETURN_IF_FAILED(frame->Initialize(options.Get()), "Initializing the output frame");
-  NMC_RETURN_IF_FAILED(frame->SetSize(width, height), "Setting the output size");
-  NMC_RETURN_IF_FAILED(frame->SetPixelFormat(&format), "Setting the pixel format");
-  if (format != requested_format) {
-    return Outcome::Of(Status::kFailed, "The encoder rejected the pixel format");
-  }
-  NMC_RETURN_IF_FAILED(frame->WritePixels(height, stride, static_cast<UINT>(pixels.size()),
-                                          pixels.data()),
-                       "Encoding the pixels");
-  NMC_RETURN_IF_FAILED(frame->Commit(), "Finishing the frame");
-  NMC_RETURN_IF_FAILED(encoder->Commit(), "Finishing the file");
-  return Outcome::Compressed(width, height);
+  const auto write = [&](IWICBitmapFrameDecode* source_frame, bool* metadata_failed) -> Outcome {
+    ComPtr<IWICStream> stream;
+    NMC_RETURN_IF_FAILED(factory->CreateStream(&stream), "Creating the output stream");
+    NMC_RETURN_IF_FAILED(stream->InitializeFromFilename(output.c_str(), GENERIC_WRITE),
+                         "Creating the output file");
+    Outcome outcome = WriteImage(factory, job, stream.Get(), pixels, pixel_format, stride, width,
+                                 height, source_frame, metadata_failed);
+    // A Store codec extension can be partly installed (HEIF without HEVC)
+    // and then fail midway; that is a missing codec, not a broken image.
+    if (outcome.status == Status::kFailed && NeedsEncoderExtension(job.format)) {
+      outcome.status = Status::kUnsupported;
+    }
+    return outcome;
+  };
+  bool metadata_failed = false;
+  Outcome outcome = write(metadata_source, &metadata_failed);
+  if (!metadata_failed) return outcome;
+  // Metadata is kept on a best effort basis: the image is written again
+  // without it, into a fresh file so that nothing of the first try remains.
+  RemoveFile(output);
+  return write(nullptr, nullptr);
 }
 
 Outcome Run(const ImageJob& job, const std::wstring& output, bool* needs_codec_extension) {
@@ -416,7 +583,9 @@ Outcome Run(const ImageJob& job, const std::wstring& output, bool* needs_codec_e
   if (image.orientation > 1) {
     pixels = Reorient(pixels, stored_width, stored_height, image.orientation);
   }
-  return Encode(factory.Get(), job, output, pixels, out_width, out_height);
+  IWICBitmapFrameDecode* metadata_source =
+      job.keep_metadata && job.format == ImageOutputFormat::kJpeg ? image.frame.Get() : nullptr;
+  return Encode(factory.Get(), job, output, pixels, out_width, out_height, metadata_source);
 }
 
 }  // namespace
@@ -488,7 +657,7 @@ Outcome WriteFrameImage(const std::vector<uint8_t>& bgra, uint32_t width, uint32
   const UINT out_width = std::max<UINT>(1, static_cast<UINT>(std::lround(width * scale)));
   const UINT out_height = std::max<UINT>(1, static_cast<UINT>(std::lround(height * scale)));
   if (out_width == width && out_height == height) {
-    return Encode(factory.Get(), job, output, bgra, width, height);
+    return Encode(factory.Get(), job, output, bgra, width, height, nullptr);
   }
 
   ComPtr<IWICBitmap> bitmap;
@@ -506,7 +675,47 @@ Outcome WriteFrameImage(const std::vector<uint8_t>& bgra, uint32_t width, uint32
   NMC_RETURN_IF_FAILED(scaler->CopyPixels(nullptr, out_width * 4, static_cast<UINT>(pixels.size()),
                                           pixels.data()),
                        "Scaling the frame");
-  return Encode(factory.Get(), job, output, pixels, out_width, out_height);
+  return Encode(factory.Get(), job, output, pixels, out_width, out_height, nullptr);
+}
+
+std::optional<UINT> OrientationValue(const PROPVARIANT& value) {
+  int64_t number = 0;
+  switch (value.vt) {
+    case VT_UI1:
+      number = value.bVal;
+      break;
+    case VT_UI2:
+      number = value.uiVal;
+      break;
+    case VT_UI4:
+      number = value.ulVal;
+      break;
+    case VT_I2:
+      number = value.iVal;
+      break;
+    case VT_I4:
+      number = value.lVal;
+      break;
+    case VT_LPSTR: {
+      // XMP stores the orientation as text.
+      if (value.pszVal == nullptr || *value.pszVal == '\0') return std::nullopt;
+      char* end = nullptr;
+      number = std::strtol(value.pszVal, &end, 10);
+      if (*end != '\0') return std::nullopt;
+      break;
+    }
+    case VT_LPWSTR: {
+      if (value.pwszVal == nullptr || *value.pwszVal == L'\0') return std::nullopt;
+      wchar_t* end = nullptr;
+      number = std::wcstol(value.pwszVal, &end, 10);
+      if (*end != L'\0') return std::nullopt;
+      break;
+    }
+    default:
+      return std::nullopt;
+  }
+  if (number < 1 || number > 8) return std::nullopt;
+  return static_cast<UINT>(number);
 }
 
 }  // namespace native_media_compressor

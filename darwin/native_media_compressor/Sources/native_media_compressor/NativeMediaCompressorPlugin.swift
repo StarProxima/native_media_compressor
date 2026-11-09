@@ -25,7 +25,7 @@ public final class NativeMediaCompressorPlugin: NSObject, FlutterPlugin, MediaCo
     return queue
   }()
   // Touched only on the platform thread.
-  private var cancelFlags: [Int64: CancelFlag] = [:]
+  private var stopFlags: [Int64: StopFlag] = [:]
 
   init(messenger: FlutterBinaryMessenger) {
     flutterApi = MediaCompressorFlutterApi(binaryMessenger: messenger)
@@ -45,11 +45,16 @@ public final class NativeMediaCompressorPlugin: NSObject, FlutterPlugin, MediaCo
     taskId: Int64, request: VideoRequest,
     completion: @escaping (Result<CompressionReply, Error>) -> Void
   ) {
-    let flag = CancelFlag()
-    cancelFlags[taskId] = flag
+    let flag = StopFlag()
+    stopFlags[taskId] = flag
+    // Taken when the task is queued, not when it starts, so the app is not
+    // suspended between one queued video and the next.
+    let backgroundTime = BackgroundTime(name: "Video compression") {
+      flag.set(.interrupted, "the system ended the background time")
+    }
     let flutterApi = self.flutterApi
     videoQueue.addOperation { [weak self] in
-      let transcoder = VideoTranscoder(request: request, isCancelled: flag.isSet) { progress in
+      let transcoder = VideoTranscoder(request: request, stopRequest: flag.request) { progress in
         DispatchQueue.main.async {
           flutterApi.onProgress(taskId: taskId, progress: progress) { _ in }
         }
@@ -58,8 +63,9 @@ public final class NativeMediaCompressorPlugin: NSObject, FlutterPlugin, MediaCo
       DispatchQueue.main.async {
         // After a hot restart a new task may reuse this id while this one is
         // still finishing; its flag must stay.
-        if self?.cancelFlags[taskId] === flag { self?.cancelFlags[taskId] = nil }
+        if self?.stopFlags[taskId] === flag { self?.stopFlags[taskId] = nil }
         completion(.success(reply))
+        backgroundTime.end()
       }
     }
   }
@@ -74,8 +80,10 @@ public final class NativeMediaCompressorPlugin: NSObject, FlutterPlugin, MediaCo
   }
 
   func cancel(taskId: Int64) throws {
-    cancelFlags[taskId]?.set()
+    stopFlags[taskId]?.set(.cancelled)
   }
+
+  func setForegroundNotification(notification: ForegroundNotification?) throws {}
 
   func probeImage(source: String, completion: @escaping (Result<ImageProbe?, Error>) -> Void) {
     imageQueue.addOperation {
@@ -101,19 +109,21 @@ public final class NativeMediaCompressorPlugin: NSObject, FlutterPlugin, MediaCo
   }
 }
 
-final class CancelFlag {
+/// Asks a running task to stop and says how it should answer. The first
+/// request wins.
+final class StopFlag {
   private let lock = NSLock()
-  private var value = false
+  private var reply: CompressionReply?
 
-  func set() {
+  func set(_ status: CompressionStatus, _ message: String? = nil) {
     lock.lock()
-    value = true
+    if reply == nil { reply = .status(status, message) }
     lock.unlock()
   }
 
-  func isSet() -> Bool {
+  func request() -> CompressionReply? {
     lock.lock()
     defer { lock.unlock() }
-    return value
+    return reply
   }
 }

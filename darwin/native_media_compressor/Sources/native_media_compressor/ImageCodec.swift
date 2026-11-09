@@ -27,6 +27,7 @@ enum ImageCodec {
     guard CGImageSourceGetType(source) != nil else {
       return .status(.unsupported, "ImageIO cannot decode this format")
     }
+    if let unsupported = unsupportedOutput(request.format) { return unsupported }
     guard let header = Header(source) else { return .status(.failed, "cannot read image") }
     let scale = Scaling.factor(
       width: Double(header.width), height: Double(header.height),
@@ -44,16 +45,25 @@ enum ImageCodec {
     guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
       return .status(.failed, "cannot decode image")
     }
+    var metadata: [CFString: Any] = [:]
+    if request.keepMetadata,
+      let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+    {
+      metadata = ImageMetadata.kept(from: properties, width: width, height: height)
+    }
     return write(
       image, width: width, height: height, format: request.format, quality: request.quality,
-      to: output)
+      metadata: metadata, to: output)
   }
 
   /// Encodes `image` at exactly `width` x `height` into `output`, redrawing
-  /// it when the size differs or JPEG needs the alpha flattened.
+  /// it when the size differs or JPEG needs the alpha flattened. `metadata`
+  /// holds ImageIO property dictionaries written along with the pixels.
   static func write(
-    _ image: CGImage, width: Int, height: Int, format: ImageFormat, quality: Int64, to output: URL
+    _ image: CGImage, width: Int, height: Int, format: ImageFormat, quality: Int64,
+    metadata: [CFString: Any] = [:], to output: URL
   ) -> CompressionReply {
+    if let unsupported = unsupportedOutput(format) { return unsupported }
     var image = image
     let isJpeg = format == .jpeg
     let flatten = isJpeg && hasAlpha(image)
@@ -64,12 +74,12 @@ enum ImageCodec {
       image = redrawn
     }
 
-    let type = (isJpeg ? "public.jpeg" : "public.png") as CFString
+    let type = typeIdentifier(format) as CFString
     guard let encoder = CGImageDestinationCreateWithURL(output as CFURL, type, 1, nil) else {
       return .status(.failed, "cannot create \(output.path)")
     }
-    var properties: [CFString: Any] = [:]
-    if isJpeg {
+    var properties = metadata
+    if format != .png {
       properties[kCGImageDestinationLossyCompressionQuality] =
         Double(min(100, max(0, quality))) / 100
     }
@@ -78,6 +88,23 @@ enum ImageCodec {
     return CompressionReply(
       status: .compressed, width: Int64(width), height: Int64(height),
       sizeBytes: output.fileSize)
+  }
+
+  /// The unsupported reply when this OS has no ImageIO encoder for `format`,
+  /// such as WebP on every current Apple OS.
+  private static func unsupportedOutput(_ format: ImageFormat) -> CompressionReply? {
+    let writable = CGImageDestinationCopyTypeIdentifiers() as? [String] ?? []
+    guard !writable.contains(typeIdentifier(format)) else { return nil }
+    return .status(.unsupported, "ImageIO cannot encode \(format) on this OS")
+  }
+
+  private static func typeIdentifier(_ format: ImageFormat) -> String {
+    switch format {
+    case .jpeg: return "public.jpeg"
+    case .png: return "public.png"
+    case .webp: return "org.webmproject.webp"
+    case .heic: return "public.heic"
+    }
   }
 
   private static func openSource(_ path: String) -> CGImageSource? {

@@ -4,6 +4,7 @@ import 'package:web/web.dart' as web;
 
 import '../types.dart';
 import 'browser.dart';
+import 'exif_splice.dart';
 import 'image_headers.dart';
 import 'media_plan.dart';
 
@@ -16,6 +17,14 @@ abstract final class WebImage {
     'image/heif',
     'image/avif',
     'image/tiff',
+  };
+
+  /// The MIME type `convertToBlob` is asked for to write [format].
+  static String mimeTypeOf(ImageFormat format) => switch (format) {
+    ImageFormat.jpeg => 'image/jpeg',
+    ImageFormat.png => 'image/png',
+    ImageFormat.webp => 'image/webp',
+    ImageFormat.heic => 'image/heic',
   };
 
   static Future<ImageMetadata?> probe(String source) async {
@@ -110,8 +119,8 @@ abstract final class WebImage {
       );
     }
 
-    final type = options.format == ImageFormat.png ? 'image/png' : 'image/jpeg';
-    final web.Blob output;
+    final type = mimeTypeOf(options.format);
+    web.Blob output;
     try {
       final canvas = web.OffscreenCanvas(width, height);
       final context =
@@ -140,6 +149,14 @@ abstract final class WebImage {
       return _result(
         CompressionStatus.unsupported,
         'the browser cannot encode $type',
+      );
+    }
+    if (options.keepMetadata &&
+        type == 'image/jpeg' &&
+        mimeType == 'image/jpeg') {
+      output = web.Blob(
+        [ExifSplice.keepExif(bytes, await Browser.bytesOf(output)).toJS].toJS,
+        web.BlobPropertyBag(type: type),
       );
     }
     return CompressionResult(

@@ -47,6 +47,12 @@ abstract class NativeMediaCompressorPlatform extends PlatformInterface {
   /// See `NativeMediaCompressor.probeVideo`.
   Future<VideoMetadata?> probeVideo(String source);
 
+  /// See `NativeMediaCompressor.androidForegroundNotification`. Only the
+  /// Android implementation does something with it.
+  Future<void> setForegroundNotification(
+    AndroidForegroundNotification? notification,
+  ) async {}
+
   /// See `NativeMediaCompressor.videoThumbnail`.
   Future<CompressionResult> videoThumbnail({
     required String source,
@@ -140,6 +146,7 @@ class PigeonMediaCompressor extends NativeMediaCompressorPlatform
       maxLongSide: options.maxLongSide,
       format: pigeon.ImageFormat.values[options.format.index],
       quality: options.quality,
+      keepMetadata: options.keepMetadata,
     );
 
     return _guard(() => _host.compressImage(request), path: destination);
@@ -207,6 +214,28 @@ class PigeonMediaCompressor extends NativeMediaCompressorPlatform
     );
 
     return _guard(() => _host.videoThumbnail(request), path: destination);
+  }
+
+  @override
+  Future<void> setForegroundNotification(
+    AndroidForegroundNotification? notification,
+  ) async {
+    try {
+      await _host.setForegroundNotification(
+        notification == null
+            ? null
+            : pigeon.ForegroundNotification(
+              title: notification.title,
+              text: notification.text,
+              iconResource: notification.iconResource,
+              channelName: notification.channelName,
+            ),
+      );
+    } on PlatformException {
+      // Not supported on this platform.
+    } on MissingPluginException {
+      // Not supported on this platform.
+    }
   }
 
   @override

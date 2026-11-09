@@ -12,7 +12,7 @@ final class VideoTranscoder {
   private let request: VideoRequest
   private let staged: StagedOutput
   private var output: URL { staged.file }
-  private let isCancelled: () -> Bool
+  private let stopRequest: () -> CompressionReply?
   private let onProgress: (Double) -> Void
   // Every writer input is fed on this queue, so the state below needs no lock.
   private let queue = DispatchQueue(label: "io.github.starproxima.native_media_compressor.video")
@@ -27,18 +27,18 @@ final class VideoTranscoder {
   private var reportedPercent = -1
 
   init(
-    request: VideoRequest, isCancelled: @escaping () -> Bool,
+    request: VideoRequest, stopRequest: @escaping () -> CompressionReply?,
     onProgress: @escaping (Double) -> Void
   ) {
     self.request = request
     self.staged = StagedOutput(destination: URL(fileURLWithPath: request.destination))
-    self.isCancelled = isCancelled
+    self.stopRequest = stopRequest
     self.onProgress = onProgress
   }
 
   /// Blocks the calling thread until the output is finished or abandoned.
   func run() -> CompressionReply {
-    if isCancelled() { return .status(.cancelled) }
+    if let stopped = stopRequest() { return stopped }
     defer {
       for file in scratchFiles { try? FileManager.default.removeItem(at: file) }
     }
@@ -180,7 +180,7 @@ final class VideoTranscoder {
       let watchdog = DispatchSource.makeTimerSource(queue: queue)
       watchdog.schedule(deadline: .now() + Self.watchdogInterval, repeating: Self.watchdogInterval)
       watchdog.setEventHandler { [self] in
-        if stopReply == nil, isCancelled() { stopReply = .status(.cancelled) }
+        if stopReply == nil { stopReply = stopRequest() }
         if stopReply == nil, writer.status == .failed { stopReply = Self.failure(writer.error) }
         if stopReply != nil { stopAll() }
       }
@@ -340,7 +340,7 @@ final class VideoTranscoder {
   ) {
     pump.input.requestMediaDataWhenReady(on: queue) { [self] in
       while pump.input.isReadyForMoreMediaData, !pump.isFinished {
-        if stopReply == nil, isCancelled() { stopReply = .status(.cancelled) }
+        if stopReply == nil { stopReply = stopRequest() }
         if stopReply != nil {
           stopAll()
           return

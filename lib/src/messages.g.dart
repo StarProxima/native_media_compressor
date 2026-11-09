@@ -120,7 +120,7 @@ enum CompressionStatus {
   failed,
 }
 
-enum ImageFormat { jpeg, png }
+enum ImageFormat { jpeg, png, webp, heic }
 
 /// Codec of the output video track.
 enum VideoCodec { h264, hevc }
@@ -333,6 +333,7 @@ class ImageRequest {
     this.maxLongSide,
     required this.format,
     required this.quality,
+    required this.keepMetadata,
   });
 
   String source;
@@ -347,6 +348,10 @@ class ImageRequest {
 
   int quality;
 
+  /// Copy EXIF and other metadata of the source, location included, except
+  /// the orientation, which is applied to the pixels.
+  bool keepMetadata;
+
   List<Object?> _toList() {
     return <Object?>[
       source,
@@ -355,6 +360,7 @@ class ImageRequest {
       maxLongSide,
       format,
       quality,
+      keepMetadata,
     ];
   }
 
@@ -371,6 +377,7 @@ class ImageRequest {
       maxLongSide: result[3] as int?,
       format: result[4]! as ImageFormat,
       quality: result[5]! as int,
+      keepMetadata: result[6]! as bool,
     );
   }
 
@@ -388,7 +395,66 @@ class ImageRequest {
         _deepEquals(maxShortSide, other.maxShortSide) &&
         _deepEquals(maxLongSide, other.maxLongSide) &&
         _deepEquals(format, other.format) &&
-        _deepEquals(quality, other.quality);
+        _deepEquals(quality, other.quality) &&
+        _deepEquals(keepMetadata, other.keepMetadata);
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  int get hashCode => _deepHash(<Object?>[runtimeType, ..._toList()]);
+}
+
+/// The notification an Android foreground service shows while videos are
+/// compressed in it.
+class ForegroundNotification {
+  ForegroundNotification({
+    required this.title,
+    this.text,
+    this.iconResource,
+    required this.channelName,
+  });
+
+  String title;
+
+  String? text;
+
+  /// Name of a drawable resource of the app for the small icon; null uses
+  /// the app icon.
+  String? iconResource;
+
+  String channelName;
+
+  List<Object?> _toList() {
+    return <Object?>[title, text, iconResource, channelName];
+  }
+
+  Object encode() {
+    return _toList();
+  }
+
+  static ForegroundNotification decode(Object result) {
+    result as List<Object?>;
+    return ForegroundNotification(
+      title: result[0]! as String,
+      text: result[1] as String?,
+      iconResource: result[2] as String?,
+      channelName: result[3]! as String,
+    );
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  bool operator ==(Object other) {
+    if (other is! ForegroundNotification || other.runtimeType != runtimeType) {
+      return false;
+    }
+    if (identical(this, other)) {
+      return true;
+    }
+    return _deepEquals(title, other.title) &&
+        _deepEquals(text, other.text) &&
+        _deepEquals(iconResource, other.iconResource) &&
+        _deepEquals(channelName, other.channelName);
   }
 
   @override
@@ -637,14 +703,17 @@ class _PigeonCodec extends StandardMessageCodec {
     } else if (value is ImageRequest) {
       buffer.putUint8(134);
       writeValue(buffer, value.encode());
-    } else if (value is CompressionReply) {
+    } else if (value is ForegroundNotification) {
       buffer.putUint8(135);
       writeValue(buffer, value.encode());
-    } else if (value is ImageProbe) {
+    } else if (value is CompressionReply) {
       buffer.putUint8(136);
       writeValue(buffer, value.encode());
-    } else if (value is VideoProbe) {
+    } else if (value is ImageProbe) {
       buffer.putUint8(137);
+      writeValue(buffer, value.encode());
+    } else if (value is VideoProbe) {
+      buffer.putUint8(138);
       writeValue(buffer, value.encode());
     } else {
       super.writeValue(buffer, value);
@@ -670,10 +739,12 @@ class _PigeonCodec extends StandardMessageCodec {
       case 134:
         return ImageRequest.decode(readValue(buffer)!);
       case 135:
-        return CompressionReply.decode(readValue(buffer)!);
+        return ForegroundNotification.decode(readValue(buffer)!);
       case 136:
-        return ImageProbe.decode(readValue(buffer)!);
+        return CompressionReply.decode(readValue(buffer)!);
       case 137:
+        return ImageProbe.decode(readValue(buffer)!);
+      case 138:
         return VideoProbe.decode(readValue(buffer)!);
       default:
         return super.readValueOfType(type, buffer);
@@ -823,6 +894,31 @@ class MediaCompressorHostApi {
       isNullValid: false,
     );
     return pigeonVar_replyValue! as CompressionReply;
+  }
+
+  /// Runs later video compressions in an Android foreground service showing
+  /// [notification], or stops doing so when it is null. Other platforms
+  /// ignore it.
+  Future<void> setForegroundNotification(
+    ForegroundNotification? notification,
+  ) async {
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.native_media_compressor.MediaCompressorHostApi.setForegroundNotification$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[notification],
+    );
+    final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
+
+    _extractReplyValueOrThrow(
+      pigeonVar_replyList,
+      pigeonVar_channelName,
+      isNullValid: true,
+    );
   }
 }
 

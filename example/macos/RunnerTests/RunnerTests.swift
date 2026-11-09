@@ -210,7 +210,7 @@ class RunnerTests: XCTestCase {
     let reply = ImageCodec.compress(
       ImageRequest(
         source: source.path, destination: destination.path, maxShortSide: nil,
-        maxLongSide: 200, format: .jpeg, quality: 80))
+        maxLongSide: 200, format: .jpeg, quality: 80, keepMetadata: false))
 
     XCTAssertEqual(reply.status, .compressed, reply.message ?? "")
     XCTAssertEqual([reply.width, reply.height], [150, 200])
@@ -227,17 +227,152 @@ class RunnerTests: XCTestCase {
     let reply = ImageCodec.compress(
       ImageRequest(
         source: source.path, destination: destination.path, maxShortSide: nil,
-        maxLongSide: 100, format: .png, quality: 80))
+        maxLongSide: 100, format: .png, quality: 80, keepMetadata: false))
 
     XCTAssertNotEqual(reply.status, .compressed)
     XCTAssertEqual(try entries(), ["broken.jpg"])
+  }
+
+  func testKeptMetadataResetsTheOrientationAndPixelSize() {
+    let source: [CFString: Any] = [
+      kCGImagePropertyPixelWidth: 4000,
+      kCGImagePropertyPixelHeight: 3000,
+      kCGImagePropertyOrientation: 6,
+      kCGImagePropertyTIFFDictionary: [
+        kCGImagePropertyTIFFMake: "Camera", kCGImagePropertyTIFFOrientation: 6,
+      ],
+      kCGImagePropertyExifDictionary: [
+        kCGImagePropertyExifDateTimeOriginal: "2024:05:01 10:00:00",
+        kCGImagePropertyExifPixelXDimension: 4000,
+        kCGImagePropertyExifPixelYDimension: 3000,
+      ],
+      kCGImagePropertyGPSDictionary: [kCGImagePropertyGPSLatitude: 48.85],
+      kCGImagePropertyJFIFDictionary: [kCGImagePropertyJFIFXDensity: 72],
+    ]
+
+    let kept = ImageMetadata.kept(from: source, width: 600, height: 800)
+
+    XCTAssertEqual(
+      Set(kept.keys.map { $0 as String }),
+      Set(
+        [
+          kCGImagePropertyOrientation, kCGImagePropertyTIFFDictionary,
+          kCGImagePropertyExifDictionary, kCGImagePropertyGPSDictionary,
+        ].map { $0 as String }))
+    XCTAssertEqual(kept[kCGImagePropertyOrientation] as? Int, 1)
+    let tiff = kept[kCGImagePropertyTIFFDictionary] as? [CFString: Any]
+    XCTAssertEqual(tiff?[kCGImagePropertyTIFFMake] as? String, "Camera")
+    XCTAssertEqual(tiff?[kCGImagePropertyTIFFOrientation] as? Int, 1)
+    let exif = kept[kCGImagePropertyExifDictionary] as? [CFString: Any]
+    XCTAssertEqual(exif?[kCGImagePropertyExifDateTimeOriginal] as? String, "2024:05:01 10:00:00")
+    XCTAssertEqual(exif?[kCGImagePropertyExifPixelXDimension] as? Int, 600)
+    XCTAssertEqual(exif?[kCGImagePropertyExifPixelYDimension] as? Int, 800)
+    let gps = kept[kCGImagePropertyGPSDictionary] as? [CFString: Any]
+    XCTAssertEqual(gps?[kCGImagePropertyGPSLatitude] as? Double, 48.85)
+  }
+
+  func testKeptMetadataWithoutDictionariesOnlyResetsTheOrientation() {
+    let kept = ImageMetadata.kept(
+      from: [kCGImagePropertyOrientation: 8], width: 10, height: 20)
+    XCTAssertEqual(kept.count, 1)
+    XCTAssertEqual(kept[kCGImagePropertyOrientation] as? Int, 1)
+  }
+
+  func testImageCodecKeepsMetadataOnlyWhenAsked() throws {
+    let source = try writeJpeg(
+      width: 400, height: 300, orientation: 6,
+      metadata: [
+        kCGImagePropertyTIFFDictionary: [kCGImagePropertyTIFFMake: "TestCamera"],
+        kCGImagePropertyGPSDictionary: [
+          kCGImagePropertyGPSLatitude: 48.85, kCGImagePropertyGPSLatitudeRef: "N",
+        ],
+      ])
+
+    for keep in [false, true] {
+      let destination = directory.appendingPathComponent("metadata-\(keep).jpg")
+      let reply = ImageCodec.compress(
+        ImageRequest(
+          source: source.path, destination: destination.path, maxShortSide: nil,
+          maxLongSide: 200, format: .jpeg, quality: 80, keepMetadata: keep))
+      XCTAssertEqual(reply.status, .compressed, reply.message ?? "")
+
+      let properties = try properties(of: destination)
+      let tiff = properties[kCGImagePropertyTIFFDictionary] as? [CFString: Any]
+      let gps = properties[kCGImagePropertyGPSDictionary] as? [CFString: Any]
+      if keep {
+        XCTAssertEqual(tiff?[kCGImagePropertyTIFFMake] as? String, "TestCamera")
+        XCTAssertEqual(gps?[kCGImagePropertyGPSLatitude] as? Double, 48.85)
+        XCTAssertEqual(properties[kCGImagePropertyOrientation] as? Int, 1)
+      } else {
+        XCTAssertNil(tiff?[kCGImagePropertyTIFFMake])
+        XCTAssertNil(gps)
+      }
+      // Already turned: the stored pixels are portrait, whatever the tag says.
+      XCTAssertEqual(properties[kCGImagePropertyPixelWidth] as? Int, 150)
+      XCTAssertEqual(properties[kCGImagePropertyPixelHeight] as? Int, 200)
+      let probe = try XCTUnwrap(ImageCodec.probe(destination.path))
+      XCTAssertEqual([probe.width, probe.height], [150, 200])
+    }
+  }
+
+  func testImageCodecWritesHeic() throws {
+    let source = try writeJpeg(width: 400, height: 300, orientation: 1)
+    let destination = directory.appendingPathComponent("out.heic")
+
+    let reply = ImageCodec.compress(
+      ImageRequest(
+        source: source.path, destination: destination.path, maxShortSide: nil,
+        maxLongSide: 200, format: .heic, quality: 70, keepMetadata: false))
+
+    XCTAssertEqual(reply.status, .compressed, reply.message ?? "")
+    XCTAssertEqual([reply.width, reply.height], [200, 150])
+    let probe = try XCTUnwrap(ImageCodec.probe(destination.path))
+    XCTAssertEqual(probe.mimeType, "image/heic")
+    XCTAssertEqual([probe.width, probe.height], [200, 150])
+  }
+
+  func testImageCodecWritesWebpOnlyWhereImageIOCan() throws {
+    let source = try writeJpeg(width: 400, height: 300, orientation: 1)
+    let destination = directory.appendingPathComponent("out.webp")
+    let writable = CGImageDestinationCopyTypeIdentifiers() as? [String] ?? []
+
+    let reply = ImageCodec.compress(
+      ImageRequest(
+        source: source.path, destination: destination.path, maxShortSide: nil,
+        maxLongSide: 200, format: .webp, quality: 70, keepMetadata: false))
+
+    if writable.contains("org.webmproject.webp") {
+      XCTAssertEqual(reply.status, .compressed, reply.message ?? "")
+      XCTAssertEqual(try XCTUnwrap(ImageCodec.probe(destination.path)).mimeType, "image/webp")
+    } else {
+      XCTAssertEqual(reply.status, .unsupported)
+      XCTAssertEqual(try entries(), ["source.jpg"])
+    }
+  }
+
+  func testStopFlagAnswersWithTheFirstRequest() {
+    let flag = StopFlag()
+    XCTAssertNil(flag.request())
+
+    flag.set(.interrupted, "out of time")
+    flag.set(.cancelled)
+
+    XCTAssertEqual(flag.request()?.status, .interrupted)
+    XCTAssertEqual(flag.request()?.message, "out of time")
+  }
+
+  private func properties(of url: URL) throws -> [CFString: Any] {
+    let source = try XCTUnwrap(CGImageSourceCreateWithURL(url as CFURL, nil))
+    return try XCTUnwrap(CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any])
   }
 
   private func entries() throws -> [String] {
     try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted()
   }
 
-  private func writeJpeg(width: Int, height: Int, orientation: Int) throws -> URL {
+  private func writeJpeg(
+    width: Int, height: Int, orientation: Int, metadata: [CFString: Any] = [:]
+  ) throws -> URL {
     let context = try XCTUnwrap(
       CGContext(
         data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
@@ -249,8 +384,9 @@ class RunnerTests: XCTestCase {
     let url = directory.appendingPathComponent("source.jpg")
     let target = try XCTUnwrap(
       CGImageDestinationCreateWithURL(url as CFURL, "public.jpeg" as CFString, 1, nil))
-    CGImageDestinationAddImage(
-      target, image, [kCGImagePropertyOrientation: orientation] as CFDictionary)
+    var properties = metadata
+    properties[kCGImagePropertyOrientation] = orientation
+    CGImageDestinationAddImage(target, image, properties as CFDictionary)
     XCTAssertTrue(CGImageDestinationFinalize(target))
     return url
   }

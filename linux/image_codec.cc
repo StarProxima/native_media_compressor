@@ -5,7 +5,10 @@
 #include <algorithm>
 #include <cstring>
 #include <exception>
+#include <initializer_list>
 #include <utility>
+
+#include "jpeg_exif.h"
 
 namespace native_media_compressor {
 
@@ -127,8 +130,63 @@ Outcome Fail(NmcCompressionStatus status, std::string message) {
   return Outcome::Of(status, std::move(message));
 }
 
+std::string WritableFormat(std::initializer_list<const char*> names) {
+  GSList* formats = gdk_pixbuf_get_formats();
+  std::string found;
+  for (GSList* item = formats; item != nullptr && found.empty(); item = item->next) {
+    auto* format = static_cast<GdkPixbufFormat*>(item->data);
+    if (!gdk_pixbuf_format_is_writable(format)) continue;
+    g_autofree gchar* name = gdk_pixbuf_format_get_name(format);
+    for (const char* candidate : names) {
+      if (name != nullptr && strcmp(name, candidate) == 0) found = name;
+    }
+  }
+  g_slist_free(formats);
+  return found;
+}
+
+// gdk-pixbuf writes JPEG and PNG itself; WebP and HEIF come from separately
+// packaged loader modules, which may be missing or load-only.
+std::string SaverName(NmcImageFormat format) {
+  switch (format) {
+    case NATIVE_MEDIA_COMPRESSOR_IMAGE_FORMAT_JPEG:
+      return "jpeg";
+    case NATIVE_MEDIA_COMPRESSOR_IMAGE_FORMAT_PNG:
+      return "png";
+    case NATIVE_MEDIA_COMPRESSOR_IMAGE_FORMAT_WEBP:
+      return WritableFormat({"webp"});
+    case NATIVE_MEDIA_COMPRESSOR_IMAGE_FORMAT_HEIC:
+      return WritableFormat({"heif", "heic"});
+  }
+  return {};
+}
+
+const char* OutputMime(NmcImageFormat format) {
+  switch (format) {
+    case NATIVE_MEDIA_COMPRESSOR_IMAGE_FORMAT_JPEG:
+      return "image/jpeg";
+    case NATIVE_MEDIA_COMPRESSOR_IMAGE_FORMAT_PNG:
+      return "image/png";
+    case NATIVE_MEDIA_COMPRESSOR_IMAGE_FORMAT_WEBP:
+      return "image/webp";
+    case NATIVE_MEDIA_COMPRESSOR_IMAGE_FORMAT_HEIC:
+      return "image/heic";
+  }
+  return "";
+}
+
+Outcome NoEncoder(NmcImageFormat format) {
+  return Fail(NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_UNSUPPORTED,
+              std::string("No gdk-pixbuf encoder for ") + OutputMime(format));
+}
+
 // Takes ownership of `image`.
 Outcome Save(GdkPixbuf* image, NmcImageFormat format, int64_t quality, const std::string& output) {
+  const std::string saver = SaverName(format);
+  if (saver.empty()) {
+    g_object_unref(image);
+    return NoEncoder(format);
+  }
   const bool jpeg = format == NATIVE_MEDIA_COMPRESSOR_IMAGE_FORMAT_JPEG;
   if (jpeg && gdk_pixbuf_get_has_alpha(image)) {
     GdkPixbuf* flat = FlattenOnWhite(image);
@@ -141,21 +199,29 @@ Outcome Save(GdkPixbuf* image, NmcImageFormat format, int64_t quality, const std
 
   GError* error = nullptr;
   gboolean saved;
-  if (jpeg) {
+  if (format == NATIVE_MEDIA_COMPRESSOR_IMAGE_FORMAT_PNG) {
+    saved = gdk_pixbuf_save(image, output.c_str(), "png", &error, nullptr);
+  } else {
     g_autofree gchar* level =
         g_strdup_printf("%d", static_cast<int>(std::clamp<int64_t>(quality, 0, 100)));
-    saved = gdk_pixbuf_save(image, output.c_str(), "jpeg", &error, "quality", level, nullptr);
-  } else {
-    saved = gdk_pixbuf_save(image, output.c_str(), "png", &error, nullptr);
+    saved = gdk_pixbuf_save(image, output.c_str(), saver.c_str(), &error, "quality", level,
+                            nullptr);
   }
   Outcome outcome;
-  if (saved) {
+  if (saved && SniffImageMime(output) != OutputMime(format)) {
+    // A module registered under the name may still write another container
+    // (HEIF with AV1 is AVIF); that is not the format that was asked for.
+    outcome = NoEncoder(format);
+  } else if (saved) {
     outcome.status = NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_COMPRESSED;
     outcome.width = gdk_pixbuf_get_width(image);
     outcome.height = gdk_pixbuf_get_height(image);
   } else {
-    outcome = Fail(IsUnknownType(error) ? NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_UNSUPPORTED
-                                        : NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_FAILED,
+    const bool unsupported =
+        IsUnknownType(error) || (error != nullptr && error->domain == GDK_PIXBUF_ERROR &&
+                                 error->code == GDK_PIXBUF_ERROR_UNSUPPORTED_OPERATION);
+    outcome = Fail(unsupported ? NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_UNSUPPORTED
+                               : NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_FAILED,
                    error != nullptr ? error->message : "Writing failed");
   }
   g_clear_error(&error);
@@ -164,6 +230,7 @@ Outcome Save(GdkPixbuf* image, NmcImageFormat format, int64_t quality, const std
 }
 
 Outcome Encode(const ImageJob& job, const std::string& output) {
+  if (SaverName(job.format).empty()) return NoEncoder(job.format);
   gint width = 0;
   gint height = 0;
   std::string mime;
@@ -214,7 +281,17 @@ Outcome Encode(const ImageJob& job, const std::string& output) {
   if (oriented == nullptr) {
     return Fail(NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_FAILED, "Out of memory");
   }
-  return Save(oriented, job.format, job.quality, output);
+  Outcome outcome = Save(oriented, job.format, job.quality, output);
+  if (outcome.status == NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_COMPRESSED &&
+      job.keep_metadata && job.format == NATIVE_MEDIA_COMPRESSOR_IMAGE_FORMAT_JPEG &&
+      mime == "image/jpeg") {
+    std::string error;
+    if (!CopyJpegExif(job.source, output, &error)) {
+      return Fail(NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_FAILED,
+                  "Could not write the metadata: " + error);
+    }
+  }
+  return outcome;
 }
 
 }  // namespace

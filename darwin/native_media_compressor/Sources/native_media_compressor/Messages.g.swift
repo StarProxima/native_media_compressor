@@ -190,6 +190,8 @@ enum CompressionStatus: Int {
 enum ImageFormat: Int {
   case jpeg = 0
   case png = 1
+  case webp = 2
+  case heic = 3
 }
 
 /// Codec of the output video track.
@@ -368,6 +370,9 @@ struct ImageRequest: Hashable {
   var maxLongSide: Int64? = nil
   var format: ImageFormat
   var quality: Int64
+  /// Copy EXIF and other metadata of the source, location included, except
+  /// the orientation, which is applied to the pixels.
+  var keepMetadata: Bool
 
 
   // swift-format-ignore: AlwaysUseLowerCamelCase
@@ -378,6 +383,7 @@ struct ImageRequest: Hashable {
     let maxLongSide: Int64? = nilOrValue(pigeonVar_list[3])
     let format = pigeonVar_list[4] as! ImageFormat
     let quality = pigeonVar_list[5] as! Int64
+    let keepMetadata = pigeonVar_list[6] as! Bool
 
     return ImageRequest(
       source: source,
@@ -385,7 +391,8 @@ struct ImageRequest: Hashable {
       maxShortSide: maxShortSide,
       maxLongSide: maxLongSide,
       format: format,
-      quality: quality
+      quality: quality,
+      keepMetadata: keepMetadata
     )
   }
   func toList() -> [Any?] {
@@ -396,13 +403,14 @@ struct ImageRequest: Hashable {
       maxLongSide,
       format,
       quality,
+      keepMetadata,
     ]
   }
   static func == (lhs: ImageRequest, rhs: ImageRequest) -> Bool {
     if Swift.type(of: lhs) != Swift.type(of: rhs) {
       return false
     }
-    return deepEqualsMessages(lhs.source, rhs.source) && deepEqualsMessages(lhs.destination, rhs.destination) && deepEqualsMessages(lhs.maxShortSide, rhs.maxShortSide) && deepEqualsMessages(lhs.maxLongSide, rhs.maxLongSide) && deepEqualsMessages(lhs.format, rhs.format) && deepEqualsMessages(lhs.quality, rhs.quality)
+    return deepEqualsMessages(lhs.source, rhs.source) && deepEqualsMessages(lhs.destination, rhs.destination) && deepEqualsMessages(lhs.maxShortSide, rhs.maxShortSide) && deepEqualsMessages(lhs.maxLongSide, rhs.maxLongSide) && deepEqualsMessages(lhs.format, rhs.format) && deepEqualsMessages(lhs.quality, rhs.quality) && deepEqualsMessages(lhs.keepMetadata, rhs.keepMetadata)
   }
 
   func hash(into hasher: inout Hasher) {
@@ -413,6 +421,58 @@ struct ImageRequest: Hashable {
     deepHashMessages(value: maxLongSide, hasher: &hasher)
     deepHashMessages(value: format, hasher: &hasher)
     deepHashMessages(value: quality, hasher: &hasher)
+    deepHashMessages(value: keepMetadata, hasher: &hasher)
+  }
+}
+
+/// The notification an Android foreground service shows while videos are
+/// compressed in it.
+///
+/// Generated class from Pigeon that represents data sent in messages.
+struct ForegroundNotification: Hashable {
+  var title: String
+  var text: String? = nil
+  /// Name of a drawable resource of the app for the small icon; null uses
+  /// the app icon.
+  var iconResource: String? = nil
+  var channelName: String
+
+
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  static func fromList(_ pigeonVar_list: [Any?]) -> ForegroundNotification? {
+    let title = pigeonVar_list[0] as! String
+    let text: String? = nilOrValue(pigeonVar_list[1])
+    let iconResource: String? = nilOrValue(pigeonVar_list[2])
+    let channelName = pigeonVar_list[3] as! String
+
+    return ForegroundNotification(
+      title: title,
+      text: text,
+      iconResource: iconResource,
+      channelName: channelName
+    )
+  }
+  func toList() -> [Any?] {
+    return [
+      title,
+      text,
+      iconResource,
+      channelName,
+    ]
+  }
+  static func == (lhs: ForegroundNotification, rhs: ForegroundNotification) -> Bool {
+    if Swift.type(of: lhs) != Swift.type(of: rhs) {
+      return false
+    }
+    return deepEqualsMessages(lhs.title, rhs.title) && deepEqualsMessages(lhs.text, rhs.text) && deepEqualsMessages(lhs.iconResource, rhs.iconResource) && deepEqualsMessages(lhs.channelName, rhs.channelName)
+  }
+
+  func hash(into hasher: inout Hasher) {
+    hasher.combine("ForegroundNotification")
+    deepHashMessages(value: title, hasher: &hasher)
+    deepHashMessages(value: text, hasher: &hasher)
+    deepHashMessages(value: iconResource, hasher: &hasher)
+    deepHashMessages(value: channelName, hasher: &hasher)
   }
 }
 
@@ -625,10 +685,12 @@ private class MessagesPigeonCodecReader: FlutterStandardReader {
     case 134:
       return ImageRequest.fromList(self.readValue() as! [Any?])
     case 135:
-      return CompressionReply.fromList(self.readValue() as! [Any?])
+      return ForegroundNotification.fromList(self.readValue() as! [Any?])
     case 136:
-      return ImageProbe.fromList(self.readValue() as! [Any?])
+      return CompressionReply.fromList(self.readValue() as! [Any?])
     case 137:
+      return ImageProbe.fromList(self.readValue() as! [Any?])
+    case 138:
       return VideoProbe.fromList(self.readValue() as! [Any?])
     default:
       return super.readValue(ofType: type)
@@ -656,14 +718,17 @@ private class MessagesPigeonCodecWriter: FlutterStandardWriter {
     } else if let value = value as? ImageRequest {
       super.writeByte(134)
       super.writeValue(value.toList())
-    } else if let value = value as? CompressionReply {
+    } else if let value = value as? ForegroundNotification {
       super.writeByte(135)
       super.writeValue(value.toList())
-    } else if let value = value as? ImageProbe {
+    } else if let value = value as? CompressionReply {
       super.writeByte(136)
       super.writeValue(value.toList())
-    } else if let value = value as? VideoProbe {
+    } else if let value = value as? ImageProbe {
       super.writeByte(137)
+      super.writeValue(value.toList())
+    } else if let value = value as? VideoProbe {
+      super.writeByte(138)
       super.writeValue(value.toList())
     } else {
       super.writeValue(value)
@@ -694,6 +759,10 @@ protocol MediaCompressorHostApi {
   func probeImage(source: String, completion: @escaping (Result<ImageProbe?, Error>) -> Void)
   func probeVideo(source: String, completion: @escaping (Result<VideoProbe?, Error>) -> Void)
   func videoThumbnail(request: ThumbnailRequest, completion: @escaping (Result<CompressionReply, Error>) -> Void)
+  /// Runs later video compressions in an Android foreground service showing
+  /// [notification], or stops doing so when it is null. Other platforms
+  /// ignore it.
+  func setForegroundNotification(notification: ForegroundNotification?) throws
 }
 
 /// Generated setup class from Pigeon to handle messages through the `binaryMessenger`.
@@ -802,6 +871,24 @@ class MediaCompressorHostApiSetup {
       }
     } else {
       videoThumbnailChannel.setMessageHandler(nil)
+    }
+    /// Runs later video compressions in an Android foreground service showing
+    /// [notification], or stops doing so when it is null. Other platforms
+    /// ignore it.
+    let setForegroundNotificationChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_media_compressor.MediaCompressorHostApi.setForegroundNotification\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      setForegroundNotificationChannel.setMessageHandler { message, reply in
+        let args = message as! [Any?]
+        let notificationArg: ForegroundNotification? = nilOrValue(args[0])
+        do {
+          try api.setForegroundNotification(notification: notificationArg)
+          reply(wrapResult(nil))
+        } catch {
+          reply(wrapError(error))
+        }
+      }
+    } else {
+      setForegroundNotificationChannel.setMessageHandler(nil)
     }
   }
 }

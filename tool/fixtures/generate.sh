@@ -116,6 +116,7 @@ frames[0].save("animated.png", save_all=True, append_images=frames[1:], duration
 EOF
 
 sips -s format heic -s formatOptions 80 heic_source.png --out photo.heic >/dev/null
+"$PYTHON" "$(dirname "$0")/exif.py" "$OUT"
 rm heic_source.png
 
 "$PYTHON" -c 'open("broken.jpg", "w").write("not a media file\n" * 256)'

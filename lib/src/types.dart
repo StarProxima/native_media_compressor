@@ -50,6 +50,39 @@ enum ImageFormat {
 
   /// Lossless PNG; [ImageOptions.quality] is ignored.
   png,
+
+  /// Lossy WebP; [ImageOptions.quality] applies. Where the platform has no
+  /// WebP encoder the result is [CompressionStatus.unsupported].
+  webp,
+
+  /// HEIC; [ImageOptions.quality] applies. Where the platform has no HEIC
+  /// encoder the result is [CompressionStatus.unsupported].
+  heic,
+}
+
+/// The notification an Android foreground service shows while videos are
+/// compressed in it; see `NativeMediaCompressor.androidForegroundNotification`.
+final class AndroidForegroundNotification {
+  /// Creates the notification settings.
+  const AndroidForegroundNotification({
+    required this.title,
+    this.text,
+    this.iconResource,
+    this.channelName = 'Video compression',
+  });
+
+  /// Notification title, such as "Compressing video".
+  final String title;
+
+  /// Notification text under the title.
+  final String? text;
+
+  /// Name of a drawable resource of the app for the small icon, such as
+  /// `ic_notification`; null uses the app icon.
+  final String? iconResource;
+
+  /// Name of the notification channel shown in the system settings.
+  final String channelName;
 }
 
 /// Video compression settings.
@@ -230,6 +263,7 @@ final class ImageOptions {
     this.quality = 85,
     this.targetBytes,
     this.minSavingsPercent,
+    this.keepMetadata = false,
   }) : assert(quality >= 0 && quality <= 100),
        assert(targetBytes == null || targetBytes > 0),
        assert(
@@ -269,6 +303,12 @@ final class ImageOptions {
   /// only outputs that are not smaller at all.
   final int? minSavingsPercent;
 
+  /// Copy the source's EXIF metadata, such as the camera, the capture time
+  /// and the location, except the orientation, which is applied to the
+  /// pixels. Off by default, so photos do not leak where they were taken.
+  /// Platforms that cannot write metadata into the output format ignore it.
+  final bool keepMetadata;
+
   /// A copy with the given fields replaced. Nullable fields cannot be cleared
   /// this way; create new options for that.
   ImageOptions copyWith({
@@ -278,6 +318,7 @@ final class ImageOptions {
     int? quality,
     int? targetBytes,
     int? minSavingsPercent,
+    bool? keepMetadata,
   }) => ImageOptions(
     maxShortSide: maxShortSide ?? this.maxShortSide,
     maxLongSide: maxLongSide ?? this.maxLongSide,
@@ -285,6 +326,7 @@ final class ImageOptions {
     quality: quality ?? this.quality,
     targetBytes: targetBytes ?? this.targetBytes,
     minSavingsPercent: minSavingsPercent ?? this.minSavingsPercent,
+    keepMetadata: keepMetadata ?? this.keepMetadata,
   );
 }
 

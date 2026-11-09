@@ -25,6 +25,30 @@ abstract final class NativeMediaCompressor {
   static NativeMediaCompressorPlatform get _platform =>
       NativeMediaCompressorPlatform.instance;
 
+  static AndroidForegroundNotification? _foregroundNotification;
+
+  /// On Android, run video compressions in a foreground service that shows
+  /// this notification, so they go on while the app is in the background.
+  /// Null, the default, runs them in the app process only, and the system may
+  /// stop them in the background with [CompressionStatus.interrupted].
+  ///
+  /// The app declares what the service needs in its `AndroidManifest.xml`:
+  /// the `FOREGROUND_SERVICE` and `FOREGROUND_SERVICE_DATA_SYNC` permissions,
+  /// and on Android 13+ the runtime `POST_NOTIFICATIONS` permission for the
+  /// notification to show. Without them videos are compressed as if this
+  /// were null. iOS finishes a running compression in the background by
+  /// itself, with a few minutes from the system; other platforms ignore it.
+  static AndroidForegroundNotification? get androidForegroundNotification =>
+      _foregroundNotification;
+
+  static set androidForegroundNotification(
+    AndroidForegroundNotification? notification,
+  ) {
+    _foregroundNotification = notification;
+    // ignore: unawaited_futures
+    _platform.setForegroundNotification(notification);
+  }
+
   /// Compresses the video at [source] into an MP4 file at [destination].
   ///
   /// [source] is a file path, a `content://` URI on Android, or a `blob:`
@@ -77,7 +101,12 @@ abstract final class NativeMediaCompressor {
     try {
       space = await TempSpace.create();
       final source = await space.write(bytes);
-      final extension = options.format == ImageFormat.png ? 'png' : 'jpg';
+      final extension = switch (options.format) {
+        ImageFormat.jpeg => 'jpg',
+        ImageFormat.png => 'png',
+        ImageFormat.webp => 'webp',
+        ImageFormat.heic => 'heic',
+      };
       final result = await _compressImage(
         source,
         space.output(extension),

@@ -31,11 +31,15 @@ typedef enum {
  * NmcImageFormat:
  * NATIVE_MEDIA_COMPRESSOR_IMAGE_FORMAT_JPEG:
  * NATIVE_MEDIA_COMPRESSOR_IMAGE_FORMAT_PNG:
+ * NATIVE_MEDIA_COMPRESSOR_IMAGE_FORMAT_WEBP:
+ * NATIVE_MEDIA_COMPRESSOR_IMAGE_FORMAT_HEIC:
  *
  */
 typedef enum {
   NATIVE_MEDIA_COMPRESSOR_IMAGE_FORMAT_JPEG = 0,
-  NATIVE_MEDIA_COMPRESSOR_IMAGE_FORMAT_PNG = 1
+  NATIVE_MEDIA_COMPRESSOR_IMAGE_FORMAT_PNG = 1,
+  NATIVE_MEDIA_COMPRESSOR_IMAGE_FORMAT_WEBP = 2,
+  NATIVE_MEDIA_COMPRESSOR_IMAGE_FORMAT_HEIC = 3
 } NmcImageFormat;
 
 /**
@@ -363,12 +367,13 @@ G_DECLARE_FINAL_TYPE(NmcImageRequest, nmc_image_request, NMC, IMAGE_REQUEST, GOb
  * max_long_side: field in this object.
  * format: field in this object.
  * quality: field in this object.
+ * keep_metadata: field in this object.
  *
  * Creates a new #ImageRequest object.
  *
  * Returns: a new #NmcImageRequest
  */
-NmcImageRequest* nmc_image_request_new(const gchar* source, const gchar* destination, int64_t* max_short_side, int64_t* max_long_side, NmcImageFormat format, int64_t quality);
+NmcImageRequest* nmc_image_request_new(const gchar* source, const gchar* destination, int64_t* max_short_side, int64_t* max_long_side, NmcImageFormat format, int64_t quality, gboolean keep_metadata);
 
 /**
  * nmc_image_request_get_source
@@ -431,6 +436,17 @@ NmcImageFormat nmc_image_request_get_format(NmcImageRequest* object);
 int64_t nmc_image_request_get_quality(NmcImageRequest* object);
 
 /**
+ * nmc_image_request_get_keep_metadata
+ * @object: a #NmcImageRequest.
+ *
+ * Copy EXIF and other metadata of the source, location included, except
+ * the orientation, which is applied to the pixels.
+ *
+ * Returns: the field value.
+ */
+gboolean nmc_image_request_get_keep_metadata(NmcImageRequest* object);
+
+/**
  * nmc_image_request_equals:
  * @a: a #NmcImageRequest.
  * @b: another #NmcImageRequest.
@@ -450,6 +466,90 @@ gboolean nmc_image_request_equals(NmcImageRequest* a, NmcImageRequest* b);
  * Returns: the hash code.
  */
 guint nmc_image_request_hash(NmcImageRequest* object);
+
+/**
+ * NmcForegroundNotification:
+ *
+ * The notification an Android foreground service shows while videos are
+ * compressed in it.
+ */
+
+G_DECLARE_FINAL_TYPE(NmcForegroundNotification, nmc_foreground_notification, NMC, FOREGROUND_NOTIFICATION, GObject)
+
+/**
+ * nmc_foreground_notification_new:
+ * title: field in this object.
+ * text: field in this object.
+ * icon_resource: field in this object.
+ * channel_name: field in this object.
+ *
+ * Creates a new #ForegroundNotification object.
+ *
+ * Returns: a new #NmcForegroundNotification
+ */
+NmcForegroundNotification* nmc_foreground_notification_new(const gchar* title, const gchar* text, const gchar* icon_resource, const gchar* channel_name);
+
+/**
+ * nmc_foreground_notification_get_title
+ * @object: a #NmcForegroundNotification.
+ *
+ * Gets the value of the title field of @object.
+ *
+ * Returns: the field value.
+ */
+const gchar* nmc_foreground_notification_get_title(NmcForegroundNotification* object);
+
+/**
+ * nmc_foreground_notification_get_text
+ * @object: a #NmcForegroundNotification.
+ *
+ * Gets the value of the text field of @object.
+ *
+ * Returns: the field value.
+ */
+const gchar* nmc_foreground_notification_get_text(NmcForegroundNotification* object);
+
+/**
+ * nmc_foreground_notification_get_icon_resource
+ * @object: a #NmcForegroundNotification.
+ *
+ * Name of a drawable resource of the app for the small icon; null uses
+ * the app icon.
+ *
+ * Returns: the field value.
+ */
+const gchar* nmc_foreground_notification_get_icon_resource(NmcForegroundNotification* object);
+
+/**
+ * nmc_foreground_notification_get_channel_name
+ * @object: a #NmcForegroundNotification.
+ *
+ * Gets the value of the channelName field of @object.
+ *
+ * Returns: the field value.
+ */
+const gchar* nmc_foreground_notification_get_channel_name(NmcForegroundNotification* object);
+
+/**
+ * nmc_foreground_notification_equals:
+ * @a: a #NmcForegroundNotification.
+ * @b: another #NmcForegroundNotification.
+ *
+ * Checks if two #NmcForegroundNotification objects are equal.
+ *
+ * Returns: TRUE if @a and @b are equal.
+ */
+gboolean nmc_foreground_notification_equals(NmcForegroundNotification* a, NmcForegroundNotification* b);
+
+/**
+ * nmc_foreground_notification_hash:
+ * @object: a #NmcForegroundNotification.
+ *
+ * Calculates a hash code for a #NmcForegroundNotification object.
+ *
+ * Returns: the hash code.
+ */
+guint nmc_foreground_notification_hash(NmcForegroundNotification* object);
 
 /**
  * NmcCompressionReply:
@@ -798,6 +898,7 @@ extern const int nmc_video_codec_type_id;
 extern const int nmc_video_request_type_id;
 extern const int nmc_thumbnail_request_type_id;
 extern const int nmc_image_request_type_id;
+extern const int nmc_foreground_notification_type_id;
 extern const int nmc_compression_reply_type_id;
 extern const int nmc_image_probe_type_id;
 extern const int nmc_video_probe_type_id;
@@ -829,6 +930,29 @@ NmcMediaCompressorHostApiCancelResponse* nmc_media_compressor_host_api_cancel_re
  */
 NmcMediaCompressorHostApiCancelResponse* nmc_media_compressor_host_api_cancel_response_new_error(const gchar* code, const gchar* message, FlValue* details);
 
+G_DECLARE_FINAL_TYPE(NmcMediaCompressorHostApiSetForegroundNotificationResponse, nmc_media_compressor_host_api_set_foreground_notification_response, NMC, MEDIA_COMPRESSOR_HOST_API_SET_FOREGROUND_NOTIFICATION_RESPONSE, GObject)
+
+/**
+ * nmc_media_compressor_host_api_set_foreground_notification_response_new:
+ *
+ * Creates a new response to MediaCompressorHostApi.setForegroundNotification.
+ *
+ * Returns: a new #NmcMediaCompressorHostApiSetForegroundNotificationResponse
+ */
+NmcMediaCompressorHostApiSetForegroundNotificationResponse* nmc_media_compressor_host_api_set_foreground_notification_response_new();
+
+/**
+ * nmc_media_compressor_host_api_set_foreground_notification_response_new_error:
+ * @code: error code.
+ * @message: error message.
+ * @details: (allow-none): error details or %NULL.
+ *
+ * Creates a new error response to MediaCompressorHostApi.setForegroundNotification.
+ *
+ * Returns: a new #NmcMediaCompressorHostApiSetForegroundNotificationResponse
+ */
+NmcMediaCompressorHostApiSetForegroundNotificationResponse* nmc_media_compressor_host_api_set_foreground_notification_response_new_error(const gchar* code, const gchar* message, FlValue* details);
+
 /**
  * NmcMediaCompressorHostApiVTable:
  *
@@ -841,6 +965,7 @@ typedef struct {
   void (*probe_image)(const gchar* source, NmcMediaCompressorHostApiResponseHandle* response_handle, gpointer user_data);
   void (*probe_video)(const gchar* source, NmcMediaCompressorHostApiResponseHandle* response_handle, gpointer user_data);
   void (*video_thumbnail)(NmcThumbnailRequest* request, NmcMediaCompressorHostApiResponseHandle* response_handle, gpointer user_data);
+  NmcMediaCompressorHostApiSetForegroundNotificationResponse* (*set_foreground_notification)(NmcForegroundNotification* notification, gpointer user_data);
 } NmcMediaCompressorHostApiVTable;
 
 /**

@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
@@ -763,6 +765,116 @@ void main() {
         expect((result.width, result.height), sources[name], reason: name);
       }
       expect(await Future.wait(probes), everyElement(isNotNull));
+    });
+  });
+
+  group('image output', () {
+    final latin1 = const Latin1Codec();
+
+    Future<String> textOf(CompressionResult result, String destination) async =>
+        latin1.decode(await files.bytesOf(_at(result, destination)));
+
+    testWidgets('writes WebP where the platform can', (_) async {
+      final destination = _out('photo.webp');
+      final result = await NativeMediaCompressor.compressImage(
+        source: await _fixture('photo_exif_rotated.jpg'),
+        destination: destination,
+        options: const ImageOptions(maxLongSide: 800, format: ImageFormat.webp),
+      );
+
+      if (_isAndroid || kIsWeb) {
+        expect(result.status, CompressionStatus.compressed, reason: '$result');
+      } else {
+        expect(
+          result.status,
+          anyOf(CompressionStatus.compressed, CompressionStatus.unsupported),
+          reason: '$result',
+        );
+      }
+      if (result.isCompressed) {
+        expect((result.width, result.height), (600, 800));
+        final text = await textOf(result, destination);
+        expect(text.substring(0, 4), 'RIFF');
+        expect(text.substring(8, 12), 'WEBP');
+      } else {
+        _expectAbsent(result, destination);
+      }
+    });
+
+    testWidgets('writes HEIC where the platform can', (_) async {
+      final destination = _out('photo.heic');
+      final result = await NativeMediaCompressor.compressImage(
+        source: await _fixture('photo_exif_rotated.jpg'),
+        destination: destination,
+        options: const ImageOptions(maxLongSide: 800, format: ImageFormat.heic),
+      );
+
+      if (_isApple) {
+        expect(result.status, CompressionStatus.compressed, reason: '$result');
+      } else {
+        expect(
+          result.status,
+          anyOf(CompressionStatus.compressed, CompressionStatus.unsupported),
+          reason: '$result',
+        );
+      }
+      if (result.isCompressed) {
+        expect((result.width, result.height), (600, 800));
+        expect(
+          (await textOf(result, destination)).substring(4, 12),
+          'ftypheic',
+        );
+      } else {
+        _expectAbsent(result, destination);
+      }
+    });
+
+    testWidgets('drops metadata unless asked to keep it', (_) async {
+      final source = await _fixture('photo_exif_full.jpg');
+      final plain = _out('metadata-dropped.jpg');
+      final kept = _out('metadata-kept.jpg');
+
+      final dropped = await NativeMediaCompressor.compressImage(
+        source: source,
+        destination: plain,
+        options: const ImageOptions(maxLongSide: 800),
+      );
+      final keeping = await NativeMediaCompressor.compressImage(
+        source: source,
+        destination: kept,
+        options: const ImageOptions(maxLongSide: 800, keepMetadata: true),
+      );
+
+      expect(dropped.status, CompressionStatus.compressed, reason: '$dropped');
+      expect(keeping.status, CompressionStatus.compressed, reason: '$keeping');
+      expect(await textOf(dropped, plain), isNot(contains('NMCTestCamera')));
+      final keptText = await textOf(keeping, kept);
+      // Linux and Windows may not write metadata; everywhere else they must.
+      if (_isAndroid || _isApple || kIsWeb) {
+        expect(keptText, contains('NMCTestCamera'));
+      }
+      // The orientation is in the pixels now, so a kept tag must not turn
+      // the picture a second time.
+      final probe = await NativeMediaCompressor.probeImage(_at(keeping, kept));
+      expect((probe!.width, probe.height), (600, 800));
+    });
+
+    testWidgets('a foreground notification keeps videos working', (_) async {
+      NativeMediaCompressor.androidForegroundNotification =
+          const AndroidForegroundNotification(title: 'Compressing video');
+      try {
+        final destination = _out('foreground.mp4');
+        final result =
+            await NativeMediaCompressor.compressVideo(
+              source: await _fixture('h264_rotated_90.mp4'),
+              destination: destination,
+              options: const VideoOptions(maxShortSide: 240),
+            ).result;
+
+        expect(result.status, CompressionStatus.compressed, reason: '$result');
+      } finally {
+        NativeMediaCompressor.androidForegroundNotification = null;
+      }
     });
   });
 

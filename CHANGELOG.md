@@ -24,6 +24,13 @@
 * `VideoMetadata.frameRate`; the automatic bitrate uses the source frame
   rate.
 * A target size that the encoder misses by more than 8% gets a second pass.
+* `ImageFormat.webp` and `ImageFormat.heic` where the platform has an
+  encoder, for images and thumbnails.
+* `ImageOptions.keepMetadata` copies EXIF, location included, with the
+  orientation reset because it is already in the pixels.
+* `NativeMediaCompressor.androidForegroundNotification` runs videos in an
+  Android foreground service; iOS asks the system for background time while
+  a video runs.
 * Encoders keep to the requested bitrate more closely: CBR fallback on
   Android, peak-constrained VBR on Windows, Baseline H.264 in the iOS
   simulator.
