@@ -1,3 +1,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
   package="io.github.starproxima.native_media_compressor">
+  <!-- The app declares the permissions the service needs, so that only apps
+       that opt in to background video work ask for them. -->
+  <application>
+    <service
+      android:name="io.github.starproxima.native_media_compressor.VideoForegroundService"
+      android:exported="false"
+      android:foregroundServiceType="dataSync" />
+  </application>
 </manifest>

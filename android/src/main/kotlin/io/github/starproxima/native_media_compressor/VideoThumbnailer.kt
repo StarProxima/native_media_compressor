@@ -10,6 +10,9 @@ import java.io.IOException
 /** Saves one frame of a video as an image, in the orientation the player shows. */
 internal class VideoThumbnailer(private val source: MediaSource, private val request: ThumbnailRequest) {
     fun run(): CompressionReply {
+        BitmapOutput.unsupportedReason(request.format)?.let {
+            return CompressionReply(CompressionStatus.UNSUPPORTED, message = it)
+        }
         val output = try {
             StagedOutput.create(request.destination)
         } catch (error: IOException) {
