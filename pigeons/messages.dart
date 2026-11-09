@@ -117,10 +117,7 @@ class ImageRequest {
 /// The notification an Android foreground service shows while videos are
 /// compressed in it.
 class ForegroundNotification {
-  ForegroundNotification({
-    required this.title,
-    required this.channelName,
-  });
+  ForegroundNotification({required this.title, required this.channelName});
 
   String title;
   String? text;
