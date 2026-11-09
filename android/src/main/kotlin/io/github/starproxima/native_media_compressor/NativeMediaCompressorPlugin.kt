@@ -77,6 +77,13 @@ class NativeMediaCompressorPlugin : FlutterPlugin, MediaCompressorHostApi {
         }
     }
 
+    override fun videoThumbnail(request: ThumbnailRequest, callback: (Result<CompressionReply>) -> Unit) {
+        requireNotNull(imageExecutor).execute {
+            val reply = guard { VideoThumbnailer(MediaSource(context, request.source), request).run() }
+            main.post { callback(Result.success(reply)) }
+        }
+    }
+
     override fun cancel(taskId: Long) {
         videoTasks[taskId]?.set(true)
     }
