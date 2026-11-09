@@ -12,8 +12,9 @@ Compress images and videos in Flutter with the codecs the platform already ships
 
 - **Presets instead of knobs:** pick `light`, `balanced` or `strong`, and the bitrate follows the frame size and stays below the source's. Add `minSavingsPercent` and an output that is not smaller enough is dropped in favour of the original.
 - **Video** to H.264 or HEVC in MP4: scale down, cap the frame rate, trim, rotate, aim at a target size, stop early at a size limit, report progress, cancel. AAC audio is copied, any other audio is re-encoded to AAC.
-- **Thumbnails:** save any frame of a video as JPEG or PNG.
-- **Images** to JPEG or PNG: scale down, apply EXIF orientation, strip metadata. HEIC, WebP and animated inputs are read where the platform can decode them.
+- **Thumbnails:** save any frame of a video as an image.
+- **Images** to JPEG, PNG, WebP or HEIC: scale down, apply EXIF orientation, strip metadata or keep it on request. HEIC, WebP and animated inputs are read where the platform can decode them.
+- **Background work:** an optional Android foreground service, and on iOS the system's background time to finish a running video.
 - **Probe** size, rotation, duration, codecs, HDR and frame count from the headers, without decoding, to decide whether compression is worth it.
 - **Results instead of exceptions.** Every call ends with a status, and a failed call never touches the destination file. An output that saves too little can be dropped in favour of the original.
 
@@ -32,7 +33,7 @@ This package calls the system codecs directly, so your app grows only by the pac
 
 Measured with Flutter 3.47.8 as the difference between an empty app and the same app calling every method of the package. Windows and Linux are not measured yet.
 
-The trade-off: the output is H.264 or HEVC, JPEG or PNG, and which inputs decode depends on the device and the system version, see [Supported formats](#supported-formats).
+The trade-off: the output is H.264 or HEVC, and JPEG, PNG, WebP or HEIC as far as the platform encodes them, and which inputs decode depends on the device and the system version, see [Supported formats](#supported-formats).
 
 ## Platform support
 
@@ -48,7 +49,7 @@ What each platform needs and where it says `unsupported` is listed under [Platfo
 
 ## Supported formats
 
-Video becomes H.264, or HEVC where the platform has an encoder and you ask for it, in MP4 with AAC audio; images become JPEG or PNG. What can be read depends on the decoders the system has. The tables below are what CI checks on every platform with one sample file per container, codec and image format: an Android 15 emulator, the current iOS simulator and macOS, Windows Server 2025 without Store extensions, Ubuntu with the GStreamer packages from [Platform notes](#platform-notes), and Chrome. A format the platform cannot read returns `unsupported`, never `failed`.
+Video becomes H.264, or HEVC where the platform has an encoder and you ask for it, in MP4 with AAC audio; images become JPEG, PNG, WebP or HEIC, see [Image output](#image-output). What can be read depends on the decoders the system has. The tables below are what CI checks on every platform with one sample file per container, codec and image format: an Android 15 emulator, the current iOS simulator and macOS, Windows Server 2025 without Store extensions, Ubuntu with the GStreamer packages from [Platform notes](#platform-notes), and Chrome. A format the platform cannot read returns `unsupported`, never `failed`.
 
 ### Video input
 
@@ -85,6 +86,18 @@ Where HEVC is not available the output is H.264; `CompressionResult.videoCodec` 
 | Web | JPEG, PNG, GIF, WebP, BMP, AVIF; HEIC in Safari only; not TIFF |
 
 Animated GIF, WebP and PNG keep their first frame.
+
+### Image output
+
+| Platform | JPEG, PNG | WebP | HEIC | `keepMetadata` |
+|---|---|---|---|---|
+| Android | always | always | no system encoder | JPEG on Android 7+, PNG and WebP on Android 11+ |
+| iOS, macOS | always | no system encoder | always | every format |
+| Windows | always | no system encoder | with the HEIF and HEVC extensions from the Microsoft Store | JPEG |
+| Linux | always | with a WebP gdk-pixbuf loader that writes, such as `webp-pixbuf-loader` | no writable loader known | JPEG from a JPEG source |
+| Web | always | Chrome, Edge and Firefox; not Safari | no browser encodes it | JPEG from a JPEG source |
+
+A format the platform cannot write returns `unsupported` and writes nothing; it never falls back to another format silently. Where `keepMetadata` is not supported the output simply has no metadata.
 
 ## Installation
 
@@ -263,10 +276,11 @@ The frame is scaled down to fit both bounds, keeping its aspect ratio, and never
 |---|---|---|
 | `maxShortSide` | `null` | Upper bound for the shorter side, in pixels. |
 | `maxLongSide` | `2048` | Upper bound for the longer side, in pixels. |
-| `format` | `ImageFormat.jpeg` | `jpeg` or `png`. |
+| `format` | `ImageFormat.jpeg` | `jpeg`, `png`, `webp` or `heic`, see [Image output](#image-output). |
 | `quality` | `85` | JPEG quality from 0 to 100; ignored for PNG. |
 | `targetBytes` | `null` | Desired output size; quality, then size, go down until it fits. |
 | `minSavingsPercent` | `null` | Drop an output that is not this much smaller than the source, with `skipped`. |
+| `keepMetadata` | `false` | Copy EXIF, including the location, except the orientation. Off by default so photos do not leak where they were taken. |
 
 ## Results instead of exceptions
 
@@ -288,7 +302,7 @@ Every status except `compressed` leaves `destination` as it was.
 
 - **Video:** SDR H.264 or HEVC in MP4, scaled down to fit `maxShortSide` and `maxLongSide`. The displayed orientation is kept, plus `rotateQuarterTurns`. AAC audio is copied without re-encoding, other audio is re-encoded to AAC; on Windows all audio is re-encoded to AAC. Frames above `maxFrameRate` are dropped.
 - **HDR video** (HLG, PQ, Dolby Vision, as phone cameras record by default) is tone-mapped to SDR on Android 7+ when the device decodes the source profile, on iOS 14+, macOS 11+ and in the browser. On Windows and Linux it is `unsupported` for now.
-- **Images:** JPEG or PNG, scaled down to fit both bounds, with EXIF orientation applied to the pixels and no metadata copied. Animated images keep the first frame. JPEG output of an image with transparency is flattened onto white.
+- **Images:** JPEG, PNG, WebP or HEIC, scaled down to fit both bounds, with EXIF orientation applied to the pixels and no metadata copied unless `keepMetadata` asks for it. Animated images keep the first frame. JPEG output of an image with transparency is flattened onto white.
 
 ## Platform notes
 
@@ -308,6 +322,23 @@ HEIC and WebP images need the matching gdk-pixbuf loaders, such as `heif-gdk-pix
 **Web.** `source` is a `blob:`, `data:` or same-origin (or CORS-enabled) `http(s):` URL. `destination` is ignored: `result.path` is a new object URL of the output, which you release with `URL.revokeObjectURL` when done. Video input must be MP4 or QuickTime (fragmented MP4 is `unsupported`), and which input codecs decode depends on the browser; without WebCodecs video calls return `unsupported`. HEIC images are `unsupported` outside Safari.
 
 **Background isolates.** Compression works from any isolate, but `CompressionTask.progress` only reports in the root isolate.
+
+**Background work.** On iOS a running video gets the background time the system grants, a few minutes, and answers `interrupted` if that runs out. On Android, set a notification and videos run in a foreground service that keeps going in the background:
+
+```dart
+NativeMediaCompressor.androidForegroundNotification =
+    const AndroidForegroundNotification(title: 'Compressing video');
+```
+
+The app declares what the service needs; the package itself requests no permissions:
+
+```xml
+<uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+<uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+```
+
+Without them, or when the system refuses to start the service, videos run as before.
 
 ## Example
 
