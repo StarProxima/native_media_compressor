@@ -37,6 +37,8 @@ class NativeMediaCompressorPlugin : public flutter::Plugin, public MediaCompress
                   std::function<void(ErrorOr<std::optional<ImageProbe>> reply)> result) override;
   void ProbeVideo(const std::string& source,
                   std::function<void(ErrorOr<std::optional<VideoProbe>> reply)> result) override;
+  void VideoThumbnail(const ThumbnailRequest& request,
+                      std::function<void(ErrorOr<CompressionReply> reply)> result) override;
 
  private:
   flutter::BinaryMessenger* messenger_;

@@ -7,11 +7,18 @@
 #include <mferror.h>
 #include <mfidl.h>
 #include <mfreadwrite.h>
+#include <mftransform.h>
+#include <strmif.h>
 #include <wrl/client.h>
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <cstdlib>
 #include <cstring>
+#include <vector>
+
+#include "image_codec.h"
 
 namespace native_media_compressor {
 namespace {
@@ -23,12 +30,14 @@ constexpr DWORD kAudioStream = static_cast<DWORD>(MF_SOURCE_READER_FIRST_AUDIO_S
 constexpr DWORD kAllStreams = static_cast<DWORD>(MF_SOURCE_READER_ALL_STREAMS);
 constexpr DWORD kMediaSource = static_cast<DWORD>(MF_SOURCE_READER_MEDIASOURCE);
 constexpr LONGLONG kTicksPerSecond = 10000000;
-constexpr UINT32 kAudioBytesPerSecond = 16000;  // 128 kbit/s
+constexpr LONGLONG kTicksPerMillisecond = 10000;
 constexpr int kSizeCheckInterval = 10;
 constexpr auto kProgressInterval = std::chrono::milliseconds(100);
 
 constexpr GUID kDolbyAc3 = {0xe06d802c, 0xdb46, 0x11cf, {0xb4, 0xd1, 0x00, 0x80, 0x5f, 0x6c, 0xbb, 0xea}};
 constexpr GUID kDolbyDigitalPlus = {0xa7fb87af, 0x2d02, 0x42fb, {0xa4, 0xd4, 0x05, 0xcd, 0x93, 0x84, 0x3b, 0xdd}};
+constexpr GUID kHevcFormat = {0x43564548, 0x0000, 0x0010, {0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71}};
+constexpr GUID kVideoEncoderCategory = {0xf79eac7d, 0xe545, 0x4387, {0xbd, 0xee, 0xd6, 0x47, 0xd7, 0xbd, 0xe4, 0x2a}};
 
 // Windows N ships without Media Foundation unless the Media Feature Pack is
 // installed. Its DLLs are delay-loaded, so the plugin still loads there; any
@@ -304,6 +313,168 @@ HRESULT RotateNv12Sample(IMFSample* input, UINT32 width, UINT32 height, LONG def
   return S_OK;
 }
 
+// The sink writer finds the encoder itself and fails late when there is none,
+// so HEVC is requested only when an encoder is registered: Windows ships none
+// without the Store extension or a GPU driver that adds one.
+bool HasHevcEncoder() {
+  const MFT_REGISTER_TYPE_INFO output = {MFMediaType_Video, kHevcFormat};
+  IMFActivate** activates = nullptr;
+  UINT32 count = 0;
+  const UINT32 flags = static_cast<UINT32>(MFT_ENUM_FLAG_SYNCMFT | MFT_ENUM_FLAG_ASYNCMFT |
+                                           MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_SORTANDFILTER);
+  if (FAILED(MFTEnumEx(kVideoEncoderCategory, flags, nullptr, &output, &activates, &count))) {
+    return false;
+  }
+  for (UINT32 index = 0; index < count; ++index) activates[index]->Release();
+  CoTaskMemFree(activates);
+  return count > 0;
+}
+
+// With only MF_MT_AVG_BITRATE the encoder's default rate control overshoots
+// the target badly on short clips, so the rates and the keyframe interval are
+// also set on the encoder itself. A value the encoder rejects keeps its
+// default rather than failing the job.
+void ConfigureRateControl(IMFSinkWriter* writer, DWORD stream, UINT32 bitrate,
+                          UINT32 gop_frames) {
+  ComPtr<IMFSinkWriterEx> writer_ex;
+  if (FAILED(writer->QueryInterface(IID_PPV_ARGS(&writer_ex)))) return;
+  ComPtr<ICodecAPI> codec_api;
+  for (DWORD index = 0; !codec_api; ++index) {
+    GUID category = GUID_NULL;
+    ComPtr<IMFTransform> transform;
+    if (FAILED(writer_ex->GetTransformForStream(stream, index, &category, &transform))) return;
+    if (category == kVideoEncoderCategory) transform.As(&codec_api);
+  }
+  auto set_value = [&](const GUID& api, UINT32 value) {
+    VARIANT variant = {};
+    variant.vt = VT_UI4;
+    variant.ulVal = value;
+    return codec_api->SetValue(&api, &variant);
+  };
+  if (FAILED(set_value(CODECAPI_AVEncCommonRateControlMode,
+                       static_cast<UINT32>(eAVEncCommonRateControlMode_PeakConstrainedVBR)))) {
+    set_value(CODECAPI_AVEncCommonRateControlMode,
+              static_cast<UINT32>(eAVEncCommonRateControlMode_CBR));
+  }
+  // The peak goes first: some encoders reject a mean above the current peak.
+  const uint64_t peak = static_cast<uint64_t>(bitrate) * 3 / 2;
+  set_value(CODECAPI_AVEncCommonMaxBitRate,
+            static_cast<UINT32>(std::min<uint64_t>(peak, 0xFFFFFFFFull)));
+  set_value(CODECAPI_AVEncCommonMeanBitRate, bitrate);
+  set_value(CODECAPI_AVEncMPVGOPSize, gop_frames);
+}
+
+// A source that cannot seek is read from its start instead; the samples before
+// the wanted time are dropped either way.
+void SeekTo(IMFSourceReader* reader, LONGLONG time) {
+  PROPVARIANT position;
+  PropVariantInit(&position);
+  position.vt = VT_I8;
+  position.hVal.QuadPart = time;
+  reader->SetCurrentPosition(GUID_NULL, position);
+  PropVariantClear(&position);
+}
+
+// Cuts a decoded PCM sample to the frames inside `range` and moves it onto the
+// output timeline, which starts at `range.start`. `output` stays null when no
+// frame is kept.
+HRESULT CropAudioSample(IMFSample* input, LONGLONG time, const TrimRange& range,
+                        UINT32 block_alignment, UINT32 sample_rate, ComPtr<IMFSample>* output) {
+  output->Reset();
+  if (block_alignment == 0 || sample_rate == 0) return MF_E_INVALIDMEDIATYPE;
+  ComPtr<IMFMediaBuffer> buffer;
+  NMC_RETURN_HR_IF_FAILED(input->ConvertToContiguousBuffer(&buffer));
+  DWORD length = 0;
+  NMC_RETURN_HR_IF_FAILED(buffer->GetCurrentLength(&length));
+  const uint64_t frames = length / block_alignment;
+  const PcmCrop crop = CropPcm(time, frames, sample_rate, range);
+  if (crop.keep_frames == 0) return S_OK;
+
+  ComPtr<IMFSample> sample;
+  if (crop.skip_frames == 0 && crop.keep_frames == frames) {
+    sample = input;
+  } else {
+    const DWORD offset = static_cast<DWORD>(crop.skip_frames * block_alignment);
+    const DWORD size = static_cast<DWORD>(crop.keep_frames * block_alignment);
+    ComPtr<IMFMediaBuffer> cropped;
+    NMC_RETURN_HR_IF_FAILED(MFCreateMemoryBuffer(size, &cropped));
+    BYTE* from = nullptr;
+    NMC_RETURN_HR_IF_FAILED(buffer->Lock(&from, nullptr, nullptr));
+    BYTE* to = nullptr;
+    if (const HRESULT locked = cropped->Lock(&to, nullptr, nullptr); FAILED(locked)) {
+      buffer->Unlock();
+      return locked;
+    }
+    std::memcpy(to, from + offset, size);
+    cropped->Unlock();
+    buffer->Unlock();
+    NMC_RETURN_HR_IF_FAILED(cropped->SetCurrentLength(size));
+    NMC_RETURN_HR_IF_FAILED(MFCreateSample(&sample));
+    NMC_RETURN_HR_IF_FAILED(sample->AddBuffer(cropped.Get()));
+  }
+  const LONGLONG kept_time =
+      time + static_cast<LONGLONG>(crop.skip_frames) * kTicksPerSecond / sample_rate;
+  NMC_RETURN_HR_IF_FAILED(sample->SetSampleTime(std::max<LONGLONG>(0, kept_time - range.start)));
+  NMC_RETURN_HR_IF_FAILED(sample->SetSampleDuration(
+      static_cast<LONGLONG>(crop.keep_frames) * kTicksPerSecond / sample_rate));
+  *output = sample;
+  return S_OK;
+}
+
+// Copies a decoded RGB32 frame into top-down BGRA rows turned clockwise by
+// `degrees`. The fourth byte of RGB32 is undefined, so it is set to opaque.
+HRESULT CopyRgb32Frame(IMFSample* sample, UINT32 width, UINT32 height, LONG default_stride,
+                       UINT32 degrees, std::vector<uint8_t>* pixels) {
+  pixels->assign(static_cast<size_t>(width) * height * 4, 0);
+  ComPtr<IMFMediaBuffer> buffer;
+  NMC_RETURN_HR_IF_FAILED(sample->ConvertToContiguousBuffer(&buffer));
+
+  // Rows of RGB32 may be stored bottom-up; then the pitch is negative and the
+  // first row is at the end of the buffer.
+  BYTE* first_row = nullptr;
+  LONG pitch = 0;
+  ComPtr<IMF2DBuffer> buffer_2d;
+  const bool locked_2d =
+      SUCCEEDED(buffer.As(&buffer_2d)) && SUCCEEDED(buffer_2d->Lock2D(&first_row, &pitch));
+  if (!locked_2d) {
+    BYTE* data = nullptr;
+    DWORD max_length = 0;
+    DWORD current_length = 0;
+    NMC_RETURN_HR_IF_FAILED(buffer->Lock(&data, &max_length, &current_length));
+    pitch = default_stride != 0 ? default_stride : static_cast<LONG>(width * 4);
+    const uint64_t needed = static_cast<uint64_t>(std::abs(pitch)) * height;
+    if (current_length < needed) {
+      buffer->Unlock();
+      return MF_E_BUFFERTOOSMALL;
+    }
+    first_row = pitch < 0 ? data + static_cast<ptrdiff_t>(-pitch) * (height - 1) : data;
+  }
+  auto unlock = [&]() {
+    if (locked_2d) {
+      buffer_2d->Unlock2D();
+    } else {
+      buffer->Unlock();
+    }
+  };
+  if (static_cast<uint64_t>(std::abs(pitch)) < static_cast<uint64_t>(width) * 4) {
+    unlock();
+    return MF_E_INVALIDMEDIATYPE;
+  }
+
+  if (degrees == 0) {
+    for (UINT32 y = 0; y < height; ++y) {
+      std::memcpy(pixels->data() + static_cast<size_t>(y) * width * 4,
+                  first_row + static_cast<ptrdiff_t>(y) * pitch, static_cast<size_t>(width) * 4);
+    }
+  } else {
+    const UINT32 target_width = degrees == 180 ? width : height;
+    RotatePlane(first_row, pitch, width, height, pixels->data(), target_width * 4, 4, degrees);
+  }
+  unlock();
+  for (size_t index = 3; index < pixels->size(); index += 4) (*pixels)[index] = 255;
+  return S_OK;
+}
+
 bool IsUnsupportedSource(HRESULT result) {
   return result == MF_E_UNSUPPORTED_BYTESTREAM_TYPE || result == MF_E_UNSUPPORTED_SCHEME ||
          result == MF_E_INVALIDMEDIATYPE;
@@ -345,8 +516,10 @@ Outcome Run(const VideoJob& job, const std::wstring& output,
 
   // MF_MT_VIDEO_ROTATION is how far the stored frame is turned
   // counter-clockwise, which equals the clockwise turn a player applies.
-  const UINT32 rotation =
+  const UINT32 source_rotation =
       NormalizeRotation(MFGetAttributeUINT32(native_video.Get(), MF_MT_VIDEO_ROTATION, 0));
+  const bool source_quarter_turn = source_rotation == 90 || source_rotation == 270;
+  const UINT32 rotation = TotalRotation(source_rotation, job.rotate_quarter_turns);
   const bool quarter_turn = rotation == 90 || rotation == 270;
   const UINT32 shown_width = quarter_turn ? height : width;
   const UINT32 shown_height = quarter_turn ? width : height;
@@ -370,6 +543,11 @@ Outcome Run(const VideoJob& job, const std::wstring& output,
     }
   }
   const LONGLONG duration = Duration(reader.Get());
+  const std::optional<TrimRange> kept_range = ResolveTrim(job.start_ms, job.end_ms, duration);
+  if (!kept_range) return Outcome::Of(Status::kUnsupported, "The trim range keeps nothing");
+  const TrimRange trim = *kept_range;
+  const bool trimmed = trim.start > 0 || trim.end != TrimRange::kOpenEnd;
+  const LONGLONG kept_length = (trim.end != TrimRange::kOpenEnd ? trim.end : duration) - trim.start;
 
   NMC_RETURN_IF_FAILED(reader->SetStreamSelection(kAllStreams, FALSE), "Selecting streams");
   NMC_RETURN_IF_FAILED(reader->SetStreamSelection(kVideoStream, TRUE), "Selecting the video");
@@ -394,6 +572,14 @@ Outcome Run(const VideoJob& job, const std::wstring& output,
     NMC_RETURN_IF_FAILED(reader->GetCurrentMediaType(kAudioStream, &decoded_audio),
                          "Reading the decoded audio type");
   }
+  const UINT32 audio_channels =
+      has_audio ? MFGetAttributeUINT32(decoded_audio.Get(), MF_MT_AUDIO_NUM_CHANNELS, 0) : 0;
+  const UINT32 audio_sample_rate =
+      has_audio ? MFGetAttributeUINT32(decoded_audio.Get(), MF_MT_AUDIO_SAMPLES_PER_SECOND, 0) : 0;
+  const UINT32 audio_block_alignment =
+      has_audio ? MFGetAttributeUINT32(decoded_audio.Get(), MF_MT_AUDIO_BLOCK_ALIGNMENT,
+                                       audio_channels * 2)
+                : 0;
 
   ComPtr<IMFAttributes> writer_attributes;
   NMC_RETURN_IF_FAILED(MFCreateAttributes(&writer_attributes, 2), "Creating writer attributes");
@@ -409,13 +595,15 @@ Outcome Run(const VideoJob& job, const std::wstring& output,
   UINT32 out_height = 0;
   UINT32 decode_width = 0;
   UINT32 decode_height = 0;
+  UINT32 frame_width = 0;
+  UINT32 frame_height = 0;
   UINT32 pixel_rotation = rotation;
   LONG decoded_stride = 0;
   ComPtr<IMFSinkWriter> writer;
   DWORD video_index = 0;
   // Sets up decoding and encoding for frame sides that are multiples of
   // `alignment`. Returns a compressed Outcome when everything was accepted.
-  auto set_up_video = [&](UINT32 alignment) -> Outcome {
+  auto set_up_video = [&](UINT32 alignment, bool hevc) -> Outcome {
     out_width = AlignDown(shown_width * scale, alignment);
     out_height = AlignDown(shown_height * scale, alignment);
     decode_width = quarter_turn ? out_height : out_width;
@@ -427,14 +615,14 @@ Outcome Run(const VideoJob& job, const std::wstring& output,
                                          rate_numerator, rate_denominator, &decoded_video),
                          "Creating the decoded video type");
     HRESULT decode_result = E_FAIL;
-    if (rotation != 0) {
+    if (source_rotation != 0) {
       // Marking the requested frames as still rotated keeps the video
       // processor from turning them on its own, so the rotation is applied
       // exactly once.
       ComPtr<IMFMediaType> still_rotated;
       if (SUCCEEDED(MFCreateMediaType(&still_rotated)) &&
           SUCCEEDED(decoded_video->CopyAllItems(still_rotated.Get())) &&
-          SUCCEEDED(still_rotated->SetUINT32(MF_MT_VIDEO_ROTATION, rotation))) {
+          SUCCEEDED(still_rotated->SetUINT32(MF_MT_VIDEO_ROTATION, source_rotation))) {
         decode_result = reader->SetCurrentMediaType(kVideoStream, nullptr, still_rotated.Get());
       }
     }
@@ -448,34 +636,39 @@ Outcome Run(const VideoJob& job, const std::wstring& output,
     ComPtr<IMFMediaType> current_video;
     NMC_RETURN_IF_FAILED(reader->GetCurrentMediaType(kVideoStream, &current_video),
                          "Reading the decoded video type");
-    UINT32 current_width = 0;
-    UINT32 current_height = 0;
     NMC_RETURN_IF_FAILED(
-        MFGetAttributeSize(current_video.Get(), MF_MT_FRAME_SIZE, &current_width, &current_height),
+        MFGetAttributeSize(current_video.Get(), MF_MT_FRAME_SIZE, &frame_width, &frame_height),
         "Reading the decoded frame size");
     pixel_rotation = rotation;
-    if (current_width == decode_width && current_height == decode_height) {
+    bool processor_rotated = false;
+    if (frame_width == decode_width && frame_height == decode_height) {
       // Frames arrive as stored; they are turned while writing.
-    } else if (quarter_turn && current_width == out_width && current_height == out_height) {
-      pixel_rotation = 0;
+    } else if (source_quarter_turn && frame_width == decode_height &&
+               frame_height == decode_width) {
+      // The video processor applied the source rotation itself; only the
+      // requested quarter turns are left.
+      processor_rotated = true;
+      pixel_rotation = NormalizeRotation(rotation + 360 - source_rotation);
     } else {
       return Outcome::Of(Status::kFailed, "The decoder produced an unexpected frame size");
     }
     decoded_stride = static_cast<LONG>(
-        MFGetAttributeUINT32(current_video.Get(), MF_MT_DEFAULT_STRIDE, decode_width));
+        MFGetAttributeUINT32(current_video.Get(), MF_MT_DEFAULT_STRIDE, frame_width));
 
     NMC_RETURN_IF_FAILED(MFCreateSinkWriterFromURL(output.c_str(), nullptr,
                                                    writer_attributes.Get(), &writer),
                          "Creating the output file");
-    ComPtr<IMFMediaType> h264;
-    NMC_RETURN_IF_FAILED(CreateVideoType(MFVideoFormat_H264, out_width, out_height,
-                                         rate_numerator, rate_denominator, &h264),
-                         "Creating the H.264 type");
-    NMC_RETURN_IF_FAILED(h264->SetUINT32(MF_MT_AVG_BITRATE, bitrate), "Setting the bitrate");
-    NMC_RETURN_IF_FAILED(
-        h264->SetUINT32(MF_MT_MPEG2_PROFILE, static_cast<UINT32>(eAVEncH264VProfile_Main)),
-        "Setting the H.264 profile");
-    NMC_RETURN_IF_FAILED(writer->AddStream(h264.Get(), &video_index), "Adding the video stream");
+    ComPtr<IMFMediaType> encoded;
+    NMC_RETURN_IF_FAILED(CreateVideoType(hevc ? kHevcFormat : MFVideoFormat_H264, out_width,
+                                         out_height, rate_numerator, rate_denominator, &encoded),
+                         "Creating the output video type");
+    NMC_RETURN_IF_FAILED(encoded->SetUINT32(MF_MT_AVG_BITRATE, bitrate), "Setting the bitrate");
+    if (!hevc) {
+      NMC_RETURN_IF_FAILED(
+          encoded->SetUINT32(MF_MT_MPEG2_PROFILE, static_cast<UINT32>(eAVEncH264VProfile_Main)),
+          "Setting the H.264 profile");
+    }
+    NMC_RETURN_IF_FAILED(writer->AddStream(encoded.Get(), &video_index), "Adding the video stream");
     ComPtr<IMFMediaType> encoder_input = decoded_video;
     if (pixel_rotation != 0) {
       NMC_RETURN_IF_FAILED(CreateVideoType(MFVideoFormat_NV12, out_width, out_height,
@@ -483,7 +676,7 @@ Outcome Run(const VideoJob& job, const std::wstring& output,
                            "Creating the rotated video type");
       NMC_RETURN_IF_FAILED(encoder_input->SetUINT32(MF_MT_DEFAULT_STRIDE, out_width),
                            "Setting the rotated stride");
-    } else if (rotation != 0) {
+    } else if (processor_rotated) {
       // The video processor turned the frames itself, so they arrive upright
       // in the shown size and the encoder takes the reader's type as it is.
       NMC_RETURN_IF_FAILED(MFCreateMediaType(&encoder_input), "Creating the encoder input type");
@@ -495,35 +688,31 @@ Outcome Run(const VideoJob& job, const std::wstring& output,
     if (const HRESULT result =
             writer->SetInputMediaType(video_index, encoder_input.Get(), nullptr);
         FAILED(result)) {
-      return Outcome::Of(Status::kUnsupported, DescribeHresult("Finding an H.264 encoder", result));
+      return Outcome::Of(Status::kUnsupported,
+                         DescribeHresult(hevc ? "Finding an HEVC encoder" : "Finding an H.264 encoder",
+                                         result));
     }
+    // A keyframe about every two seconds.
+    const UINT32 gop_frames = std::max<UINT32>(
+        1, static_cast<UINT32>(std::lround(2.0 * rate_numerator / rate_denominator)));
+    ConfigureRateControl(writer.Get(), video_index, bitrate, gop_frames);
     return Outcome::Compressed(out_width, out_height);
   };
-  // The Microsoft H.264 encoder takes any even size and pads it internally.
-  // Some hardware encoders accept only multiples of 16; that is the fallback,
-  // since it squeezes the picture a little.
-  Outcome video_setup = set_up_video(2);
-  if (video_setup.status != Status::kCompressed &&
-      (out_width % 16 != 0 || out_height % 16 != 0)) {
-    video_setup = set_up_video(16);
-  }
-  if (video_setup.status != Status::kCompressed) return video_setup;
 
   DWORD audio_index = 0;
-  if (has_audio) {
-    const UINT32 channels = MFGetAttributeUINT32(decoded_audio.Get(), MF_MT_AUDIO_NUM_CHANNELS, 0);
-    const UINT32 sample_rate =
-        MFGetAttributeUINT32(decoded_audio.Get(), MF_MT_AUDIO_SAMPLES_PER_SECOND, 0);
+  auto add_audio = [&]() -> Outcome {
     ComPtr<IMFMediaType> aac;
     NMC_RETURN_IF_FAILED(MFCreateMediaType(&aac), "Creating the AAC type");
     NMC_RETURN_IF_FAILED(aac->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio), "Creating the AAC type");
     NMC_RETURN_IF_FAILED(aac->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_AAC), "Creating the AAC type");
     NMC_RETURN_IF_FAILED(aac->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE, 16), "Creating the AAC type");
-    NMC_RETURN_IF_FAILED(aac->SetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, sample_rate),
+    NMC_RETURN_IF_FAILED(aac->SetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, audio_sample_rate),
                          "Creating the AAC type");
-    NMC_RETURN_IF_FAILED(aac->SetUINT32(MF_MT_AUDIO_NUM_CHANNELS, channels), "Creating the AAC type");
-    NMC_RETURN_IF_FAILED(aac->SetUINT32(MF_MT_AUDIO_AVG_BYTES_PER_SECOND, kAudioBytesPerSecond),
+    NMC_RETURN_IF_FAILED(aac->SetUINT32(MF_MT_AUDIO_NUM_CHANNELS, audio_channels),
                          "Creating the AAC type");
+    NMC_RETURN_IF_FAILED(
+        aac->SetUINT32(MF_MT_AUDIO_AVG_BYTES_PER_SECOND, AacBytesPerSecond(job.audio_bitrate)),
+        "Creating the AAC type");
     // The AAC encoder takes only some sample rates and channel layouts.
     if (const HRESULT result = writer->AddStream(aac.Get(), &audio_index); FAILED(result)) {
       return Outcome::Of(Status::kUnsupported, DescribeHresult("Adding the AAC stream", result));
@@ -533,6 +722,34 @@ Outcome Run(const VideoJob& job, const std::wstring& output,
       return Outcome::Of(Status::kUnsupported,
                          DescribeHresult("Encoding this audio to AAC", result));
     }
+    return Outcome::Of(Status::kCompressed);
+  };
+
+  // The Microsoft H.264 encoder takes any even size and pads it internally.
+  // Some hardware encoders accept only multiples of 16; that is the fallback,
+  // since it squeezes the picture a little.
+  auto set_up_writer = [&](bool hevc) -> Outcome {
+    Outcome video_setup = set_up_video(2, hevc);
+    if (video_setup.status != Status::kCompressed &&
+        (out_width % 16 != 0 || out_height % 16 != 0)) {
+      video_setup = set_up_video(16, hevc);
+    }
+    if (video_setup.status != Status::kCompressed || !has_audio) return video_setup;
+    const Outcome audio_setup = add_audio();
+    return audio_setup.status == Status::kCompressed ? video_setup : audio_setup;
+  };
+
+  bool writes_hevc = job.prefer_hevc && HasHevcEncoder();
+  if (writes_hevc) {
+    // A hardware HEVC encoder can accept the media types and still refuse to
+    // start, so H.264 remains the fallback until writing has begun.
+    writes_hevc =
+        set_up_writer(true).status == Status::kCompressed && SUCCEEDED(writer->BeginWriting());
+  }
+  if (!writes_hevc) {
+    const Outcome writer_setup = set_up_writer(false);
+    if (writer_setup.status != Status::kCompressed) return writer_setup;
+    NMC_RETURN_IF_FAILED(writer->BeginWriting(), "Starting the encoder");
   }
 
   auto stream_bytes = [&](DWORD stream) -> int64_t {
@@ -548,10 +765,12 @@ Outcome Run(const VideoJob& job, const std::wstring& output,
     return std::max(total, FileSize(output));
   };
 
+  int written_frames = 0;
   auto write_frame = [&](IMFSample* frame) -> HRESULT {
+    ++written_frames;
     if (pixel_rotation == 0) return writer->WriteSample(video_index, frame);
     ComPtr<IMFSample> rotated;
-    NMC_RETURN_HR_IF_FAILED(RotateNv12Sample(frame, decode_width, decode_height, decoded_stride,
+    NMC_RETURN_HR_IF_FAILED(RotateNv12Sample(frame, frame_width, frame_height, decoded_stride,
                                              pixel_rotation, &rotated));
     return writer->WriteSample(video_index, rotated.Get());
   };
@@ -575,9 +794,10 @@ Outcome Run(const VideoJob& job, const std::wstring& output,
     return result;
   };
 
-  NMC_RETURN_IF_FAILED(writer->BeginWriting(), "Starting the encoder");
+  if (trim.start > 0) SeekTo(reader.Get(), trim.start);
   bool video_done = false;
   bool audio_done = !has_audio;
+  bool video_started = false;
   LONGLONG video_time = 0;
   LONGLONG audio_time = 0;
   bool kept_any_frame = false;
@@ -590,25 +810,36 @@ Outcome Run(const VideoJob& job, const std::wstring& output,
     if (cancelled.load()) return Outcome::Of(Status::kCancelled);
     // Reading whichever track is behind interleaves audio and video in the file.
     const bool is_video = !video_done && (audio_done || video_time <= audio_time);
+    const DWORD source_stream = is_video ? kVideoStream : kAudioStream;
     DWORD flags = 0;
     LONGLONG timestamp = 0;
     ComPtr<IMFSample> sample;
-    NMC_RETURN_IF_FAILED(reader->ReadSample(is_video ? kVideoStream : kAudioStream, 0, nullptr,
-                                            &flags, &timestamp, &sample),
-                         "Reading a sample");
+    NMC_RETURN_IF_FAILED(
+        reader->ReadSample(source_stream, 0, nullptr, &flags, &timestamp, &sample),
+        "Reading a sample");
     if (flags & MF_SOURCE_READERF_ERROR) {
       return Outcome::Of(Status::kFailed, "The source reader reported a stream error");
     }
     const DWORD stream = is_video ? video_index : audio_index;
     bool wrote = false;
-    if (flags & MF_SOURCE_READERF_STREAMTICK) {
+    bool ended = (flags & MF_SOURCE_READERF_ENDOFSTREAM) != 0;
+    if (sample && timestamp >= trim.end) {
+      // Deselecting a finished track keeps the reader from queueing its
+      // samples while the other track catches up.
+      sample.Reset();
+      ended = true;
+      reader->SetStreamSelection(source_stream, FALSE);
+    }
+    if ((flags & MF_SOURCE_READERF_STREAMTICK) &&
+        (!trimmed || (timestamp >= trim.start && timestamp < trim.end))) {
       if (is_video && held_frame) {
         NMC_RETURN_IF_FAILED(write_held_frame(held_end), "Writing a frame");
         wrote = true;
       }
-      NMC_RETURN_IF_FAILED(writer->SendStreamTick(stream, timestamp), "Writing a stream gap");
+      NMC_RETURN_IF_FAILED(writer->SendStreamTick(stream, timestamp - trim.start),
+                           "Writing a stream gap");
     }
-    if (flags & MF_SOURCE_READERF_ENDOFSTREAM) {
+    if (ended) {
       if (is_video) {
         video_done = true;
       } else {
@@ -621,9 +852,37 @@ Outcome Run(const VideoJob& job, const std::wstring& output,
       audio_time = timestamp;
     }
 
+    if (sample && is_video && trim.start > 0) {
+      LONGLONG sample_duration = 0;
+      if (FAILED(sample->GetSampleDuration(&sample_duration)) || sample_duration <= 0) {
+        sample_duration = source_frame_duration;
+      }
+      const LONGLONG frame_end = timestamp + sample_duration;
+      if (frame_end <= trim.start) {
+        sample.Reset();
+      } else {
+        // The first kept frame covers the output from its start, also when it
+        // began before the trim start or the seek landed a little after it.
+        const LONGLONG begin = video_started ? timestamp - trim.start : 0;
+        video_started = true;
+        NMC_RETURN_IF_FAILED(sample->SetSampleTime(begin), "Trimming the video");
+        NMC_RETURN_IF_FAILED(sample->SetSampleDuration(frame_end - trim.start - begin),
+                             "Trimming the video");
+        timestamp = trim.start + begin;
+      }
+    }
+
     if (sample && !is_video) {
-      NMC_RETURN_IF_FAILED(writer->WriteSample(stream, sample.Get()), "Writing a sample");
-      wrote = true;
+      ComPtr<IMFSample> kept = sample;
+      if (trimmed) {
+        NMC_RETURN_IF_FAILED(CropAudioSample(sample.Get(), timestamp, trim, audio_block_alignment,
+                                             audio_sample_rate, &kept),
+                             "Trimming the audio");
+      }
+      if (kept) {
+        NMC_RETURN_IF_FAILED(writer->WriteSample(stream, kept.Get()), "Writing a sample");
+        wrote = true;
+      }
     } else if (sample && frame_interval == 0) {
       NMC_RETURN_IF_FAILED(write_frame(sample.Get()), "Writing a frame");
       wrote = true;
@@ -661,9 +920,9 @@ Outcome Run(const VideoJob& job, const std::wstring& output,
         written_bytes() > *job.max_bytes) {
       return Outcome::Of(Status::kTooLarge);
     }
-    if (!is_video || duration <= 0) continue;
-    const double fraction =
-        std::clamp(static_cast<double>(timestamp) / static_cast<double>(duration), 0.0, 1.0);
+    if (!is_video || kept_length <= 0) continue;
+    const double fraction = std::clamp(
+        static_cast<double>(timestamp - trim.start) / static_cast<double>(kept_length), 0.0, 1.0);
     const auto now = std::chrono::steady_clock::now();
     if (fraction >= reported + 0.01 || (fraction > reported && now - reported_at >= kProgressInterval)) {
       reported = fraction;
@@ -671,8 +930,133 @@ Outcome Run(const VideoJob& job, const std::wstring& output,
       on_progress(fraction);
     }
   }
+  if (trimmed && written_frames == 0) {
+    return Outcome::Of(Status::kUnsupported, "The trim range keeps no video frames");
+  }
   NMC_RETURN_IF_FAILED(writer->Finalize(), "Finishing the output");
-  return Outcome::Compressed(out_width, out_height);
+  Outcome outcome = Outcome::Compressed(out_width, out_height);
+  outcome.video_codec = writes_hevc ? "video/hevc" : "video/avc";
+  return outcome;
+}
+
+Outcome RunThumbnail(const ThumbnailJob& job, const std::wstring& output) {
+  ComPtr<IMFAttributes> reader_attributes;
+  NMC_RETURN_IF_FAILED(MFCreateAttributes(&reader_attributes, 1), "Creating reader attributes");
+  // The source reader's video processor converts the decoded frame to RGB32,
+  // which WIC takes as it is.
+  NMC_RETURN_IF_FAILED(
+      reader_attributes->SetUINT32(MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, TRUE),
+      "Enabling video processing");
+  ComPtr<IMFSourceReader> reader;
+  if (const HRESULT result =
+          MFCreateSourceReaderFromURL(job.source.c_str(), reader_attributes.Get(), &reader);
+      FAILED(result)) {
+    return Outcome::Of(IsUnsupportedSource(result) ? Status::kUnsupported : Status::kFailed,
+                       DescribeHresult("Opening the source", result));
+  }
+  ComPtr<IMFMediaType> native_video;
+  if (FAILED(reader->GetNativeMediaType(kVideoStream, 0, &native_video))) {
+    return Outcome::Of(Status::kUnsupported, "The source has no video track");
+  }
+  UINT32 width = 0;
+  UINT32 height = 0;
+  NMC_RETURN_IF_FAILED(MFGetAttributeSize(native_video.Get(), MF_MT_FRAME_SIZE, &width, &height),
+                       "Reading the frame size");
+  if (width == 0 || height == 0) {
+    return Outcome::Of(Status::kUnsupported, "The video track has no frame size");
+  }
+  const UINT32 rotation =
+      NormalizeRotation(MFGetAttributeUINT32(native_video.Get(), MF_MT_VIDEO_ROTATION, 0));
+  const bool quarter_turn = rotation == 90 || rotation == 270;
+  UINT32 rate_numerator = 0;
+  UINT32 rate_denominator = 0;
+  MFGetAttributeRatio(native_video.Get(), MF_MT_FRAME_RATE, &rate_numerator, &rate_denominator);
+  if (rate_numerator == 0 || rate_denominator == 0) {
+    rate_numerator = 30;
+    rate_denominator = 1;
+  }
+
+  NMC_RETURN_IF_FAILED(reader->SetStreamSelection(kAllStreams, FALSE), "Selecting streams");
+  NMC_RETURN_IF_FAILED(reader->SetStreamSelection(kVideoStream, TRUE), "Selecting the video");
+  ComPtr<IMFMediaType> rgb;
+  NMC_RETURN_IF_FAILED(
+      CreateVideoType(MFVideoFormat_RGB32, width, height, rate_numerator, rate_denominator, &rgb),
+      "Creating the RGB type");
+  HRESULT decode_result = E_FAIL;
+  if (rotation != 0) {
+    // As for transcoding: frames marked as still rotated are not turned by the
+    // video processor, so the rotation is applied exactly once.
+    ComPtr<IMFMediaType> still_rotated;
+    if (SUCCEEDED(MFCreateMediaType(&still_rotated)) &&
+        SUCCEEDED(rgb->CopyAllItems(still_rotated.Get())) &&
+        SUCCEEDED(still_rotated->SetUINT32(MF_MT_VIDEO_ROTATION, rotation))) {
+      decode_result = reader->SetCurrentMediaType(kVideoStream, nullptr, still_rotated.Get());
+    }
+  }
+  if (FAILED(decode_result)) {
+    decode_result = reader->SetCurrentMediaType(kVideoStream, nullptr, rgb.Get());
+  }
+  if (FAILED(decode_result)) {
+    return Outcome::Of(Status::kUnsupported,
+                       DescribeHresult("Finding a decoder for the video track", decode_result));
+  }
+  ComPtr<IMFMediaType> current_video;
+  NMC_RETURN_IF_FAILED(reader->GetCurrentMediaType(kVideoStream, &current_video),
+                       "Reading the decoded video type");
+  UINT32 frame_width = 0;
+  UINT32 frame_height = 0;
+  NMC_RETURN_IF_FAILED(
+      MFGetAttributeSize(current_video.Get(), MF_MT_FRAME_SIZE, &frame_width, &frame_height),
+      "Reading the decoded frame size");
+  UINT32 pixel_rotation = rotation;
+  if (frame_width == width && frame_height == height) {
+    // Frames arrive as stored and are turned after copying.
+  } else if (quarter_turn && frame_width == height && frame_height == width) {
+    pixel_rotation = 0;
+  } else {
+    return Outcome::Of(Status::kFailed, "The decoder produced an unexpected frame size");
+  }
+  const LONG stride =
+      static_cast<LONG>(MFGetAttributeUINT32(current_video.Get(), MF_MT_DEFAULT_STRIDE, 0));
+
+  const LONGLONG frame_duration = kTicksPerSecond * rate_denominator / rate_numerator;
+  const LONGLONG target = ThumbnailTime(job.position_ms, Duration(reader.Get()), frame_duration);
+  if (target > 0) SeekTo(reader.Get(), target);
+  // The frame shown at the target is the last one starting at or before it;
+  // the first decoded frame stands in when the seek landed after it.
+  ComPtr<IMFSample> chosen;
+  for (;;) {
+    DWORD flags = 0;
+    LONGLONG timestamp = 0;
+    ComPtr<IMFSample> sample;
+    NMC_RETURN_IF_FAILED(
+        reader->ReadSample(kVideoStream, 0, nullptr, &flags, &timestamp, &sample),
+        "Reading a frame");
+    if (flags & MF_SOURCE_READERF_ERROR) {
+      return Outcome::Of(Status::kFailed, "The source reader reported a stream error");
+    }
+    if (sample) {
+      if (timestamp > target && chosen) break;
+      chosen = sample;
+      if (timestamp >= target) break;
+    }
+    if (flags & MF_SOURCE_READERF_ENDOFSTREAM) break;
+  }
+  if (!chosen) return Outcome::Of(Status::kFailed, "The video track has no frames");
+
+  std::vector<uint8_t> pixels;
+  NMC_RETURN_IF_FAILED(
+      CopyRgb32Frame(chosen.Get(), frame_width, frame_height, stride, pixel_rotation, &pixels),
+      "Copying the frame");
+  chosen.Reset();
+  reader.Reset();
+  const bool turned = pixel_rotation == 90 || pixel_rotation == 270;
+  ImageJob image;
+  image.bounds = job.bounds;
+  image.png = job.png;
+  image.quality = job.quality;
+  return WriteFrameImage(pixels, turned ? frame_height : frame_width,
+                         turned ? frame_width : frame_height, image, output);
 }
 
 }  // namespace
@@ -758,9 +1142,102 @@ std::optional<VideoInfo> ProbeVideoFile(const std::wstring& source) {
       info.audio_codec = AudioCodecName(audio_subtype);
     }
   }
+  UINT32 rate_numerator = 0;
+  UINT32 rate_denominator = 0;
+  if (SUCCEEDED(MFGetAttributeRatio(video.Get(), MF_MT_FRAME_RATE, &rate_numerator,
+                                    &rate_denominator)) &&
+      rate_numerator > 0 && rate_denominator > 0) {
+    info.frame_rate = static_cast<double>(rate_numerator) / rate_denominator;
+  }
   const int64_t size = FileSize(source);
   if (size > 0 && info.duration_ms > 0) info.bitrate = size * 8 * 1000 / info.duration_ms;
   return info;
+}
+
+Outcome SaveVideoFrame(const ThumbnailJob& job) {
+  if (IsDirectory(job.destination)) {
+    return Outcome::Of(Status::kFailed, "The destination is a directory");
+  }
+  if (!IsMediaFoundationAvailable()) {
+    return Outcome::Of(Status::kUnsupported, "Media Foundation is not installed");
+  }
+  try {
+    PendingOutput output(job.destination);
+    if (!output.reserved()) {
+      return Outcome::Of(Status::kFailed, "Cannot create a file next to the destination");
+    }
+    Outcome outcome;
+    {
+      MediaFoundationScope scope;
+      if (!scope.started()) {
+        return Outcome::Of(Status::kUnsupported, "Media Foundation failed to start");
+      }
+      outcome = RunThumbnail(job, output.path());
+    }
+    if (outcome.status != Status::kCompressed) return outcome;
+    outcome.size_bytes = FileSize(output.path());
+    if (outcome.size_bytes <= 0) return Outcome::Of(Status::kFailed, "The encoder wrote no output");
+    if (!output.Commit()) {
+      return Outcome::Of(Status::kFailed,
+                         DescribeHresult("Replacing the destination",
+                                         HRESULT_FROM_WIN32(GetLastError())));
+    }
+    return outcome;
+  } catch (...) {
+    return Outcome::Of(Status::kFailed, kUnexpectedError);
+  }
+}
+
+std::optional<TrimRange> ResolveTrim(std::optional<int64_t> start_ms,
+                                     std::optional<int64_t> end_ms, int64_t duration) {
+  constexpr int64_t kMaxMs = INT64_MAX / kTicksPerMillisecond - 1;
+  TrimRange range;
+  if (start_ms && *start_ms > 0) range.start = std::min(*start_ms, kMaxMs) * kTicksPerMillisecond;
+  if (end_ms) range.end = std::clamp<int64_t>(*end_ms, 0, kMaxMs) * kTicksPerMillisecond;
+  if (duration > 0 && range.end >= duration) range.end = TrimRange::kOpenEnd;
+  if (range.end <= range.start) return std::nullopt;
+  if (duration > 0 && range.start >= duration) return std::nullopt;
+  return range;
+}
+
+PcmCrop CropPcm(int64_t time, uint64_t frames, uint32_t sample_rate, const TrimRange& range) {
+  // Frames from the start of the buffer up to `moment`, rounded to the
+  // nearest frame and limited to the buffer.
+  auto frames_before = [&](int64_t moment) -> uint64_t {
+    if (moment == TrimRange::kOpenEnd) return frames;
+    if (moment <= time || sample_rate == 0) return 0;
+    const double offset =
+        static_cast<double>(moment - time) * sample_rate / static_cast<double>(kTicksPerSecond);
+    if (offset >= static_cast<double>(frames)) return frames;
+    return static_cast<uint64_t>(std::llround(offset));
+  };
+  PcmCrop crop;
+  crop.skip_frames = frames_before(range.start);
+  const uint64_t end_frames = frames_before(range.end);
+  crop.keep_frames = end_frames > crop.skip_frames ? end_frames - crop.skip_frames : 0;
+  return crop;
+}
+
+uint32_t TotalRotation(uint32_t source_degrees, int64_t quarter_turns) {
+  const int64_t turns = ((quarter_turns % 4) + 4) % 4;
+  return static_cast<uint32_t>((source_degrees % 360 + turns * 90) % 360);
+}
+
+uint32_t AacBytesPerSecond(int64_t bitrate) {
+  constexpr uint32_t kAllowed[] = {12000, 16000, 20000, 24000};
+  const int64_t wanted = bitrate / 8;
+  uint32_t best = kAllowed[0];
+  for (const uint32_t allowed : kAllowed) {
+    if (std::llabs(wanted - allowed) < std::llabs(wanted - best)) best = allowed;
+  }
+  return best;
+}
+
+int64_t ThumbnailTime(int64_t position_ms, int64_t duration, int64_t frame_duration) {
+  constexpr int64_t kMaxMs = INT64_MAX / kTicksPerMillisecond - 1;
+  int64_t time = std::clamp<int64_t>(position_ms, 0, kMaxMs) * kTicksPerMillisecond;
+  if (duration > 0) time = std::min(time, std::max<int64_t>(0, duration - frame_duration));
+  return time;
 }
 
 }  // namespace native_media_compressor
