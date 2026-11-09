@@ -176,7 +176,7 @@ abstract final class ImagePlanning {
     required int longSide,
   }) {
     if (sizeBytes <= targetBytes) return null;
-    if (tried.format == ImageFormat.jpeg && tried.quality > minQuality) {
+    if (tried.format != ImageFormat.png && tried.quality > minQuality) {
       // JPEG size grows roughly with quality, so aim straight at the target
       // instead of stepping down a few points at a time.
       final ratio = targetBytes / sizeBytes;
@@ -201,6 +201,7 @@ abstract final class ImagePlanning {
       quality: tried.quality,
       targetBytes: tried.targetBytes,
       minSavingsPercent: tried.minSavingsPercent,
+      keepMetadata: tried.keepMetadata,
     );
   }
 }

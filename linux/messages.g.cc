@@ -694,6 +694,7 @@ struct _NmcImageRequest {
   int64_t* max_long_side;
   NmcImageFormat format;
   int64_t quality;
+  gboolean keep_metadata;
 };
 
 G_DEFINE_TYPE(NmcImageRequest, nmc_image_request, G_TYPE_OBJECT)
@@ -714,7 +715,7 @@ static void nmc_image_request_class_init(NmcImageRequestClass* klass) {
   G_OBJECT_CLASS(klass)->dispose = nmc_image_request_dispose;
 }
 
-NmcImageRequest* nmc_image_request_new(const gchar* source, const gchar* destination, int64_t* max_short_side, int64_t* max_long_side, NmcImageFormat format, int64_t quality) {
+NmcImageRequest* nmc_image_request_new(const gchar* source, const gchar* destination, int64_t* max_short_side, int64_t* max_long_side, NmcImageFormat format, int64_t quality, gboolean keep_metadata) {
   NmcImageRequest* self = NMC_IMAGE_REQUEST(g_object_new(nmc_image_request_get_type(), nullptr));
   self->source = g_strdup(source);
   self->destination = g_strdup(destination);
@@ -734,6 +735,7 @@ NmcImageRequest* nmc_image_request_new(const gchar* source, const gchar* destina
   }
   self->format = format;
   self->quality = quality;
+  self->keep_metadata = keep_metadata;
   return self;
 }
 
@@ -767,6 +769,11 @@ int64_t nmc_image_request_get_quality(NmcImageRequest* self) {
   return self->quality;
 }
 
+gboolean nmc_image_request_get_keep_metadata(NmcImageRequest* self) {
+  g_return_val_if_fail(NMC_IS_IMAGE_REQUEST(self), FALSE);
+  return self->keep_metadata;
+}
+
 static FlValue* nmc_image_request_to_list(NmcImageRequest* self) {
   FlValue* values = fl_value_new_list();
   fl_value_append_take(values, fl_value_new_string(self->source));
@@ -775,6 +782,7 @@ static FlValue* nmc_image_request_to_list(NmcImageRequest* self) {
   fl_value_append_take(values, self->max_long_side != nullptr ? fl_value_new_int(*self->max_long_side) : fl_value_new_null());
   fl_value_append_take(values, fl_value_new_custom(nmc_image_format_type_id, fl_value_new_int(self->format), (GDestroyNotify)fl_value_unref));
   fl_value_append_take(values, fl_value_new_int(self->quality));
+  fl_value_append_take(values, fl_value_new_bool(self->keep_metadata));
   return values;
 }
 
@@ -801,7 +809,9 @@ static NmcImageRequest* nmc_image_request_new_from_list(FlValue* values) {
   NmcImageFormat format = static_cast<NmcImageFormat>(fl_value_get_int(reinterpret_cast<FlValue*>(const_cast<gpointer>(fl_value_get_custom_value(value4)))));
   FlValue* value5 = fl_value_get_list_value(values, 5);
   int64_t quality = fl_value_get_int(value5);
-  return nmc_image_request_new(source, destination, max_short_side, max_long_side, format, quality);
+  FlValue* value6 = fl_value_get_list_value(values, 6);
+  gboolean keep_metadata = fl_value_get_bool(value6);
+  return nmc_image_request_new(source, destination, max_short_side, max_long_side, format, quality, keep_metadata);
 }
 
 gboolean nmc_image_request_equals(NmcImageRequest* a, NmcImageRequest* b) {
@@ -835,6 +845,9 @@ gboolean nmc_image_request_equals(NmcImageRequest* a, NmcImageRequest* b) {
   if (a->quality != b->quality) {
     return FALSE;
   }
+  if (a->keep_metadata != b->keep_metadata) {
+    return FALSE;
+  }
   return TRUE;
 }
 
@@ -847,6 +860,132 @@ guint nmc_image_request_hash(NmcImageRequest* self) {
   result = result * 31 + (self->max_long_side != nullptr ? static_cast<guint>(*self->max_long_side) : 0);
   result = result * 31 + static_cast<guint>(self->format);
   result = result * 31 + static_cast<guint>(self->quality);
+  result = result * 31 + static_cast<guint>(self->keep_metadata);
+  return result;
+}
+
+struct _NmcForegroundNotification {
+  GObject parent_instance;
+
+  gchar* title;
+  gchar* text;
+  gchar* icon_resource;
+  gchar* channel_name;
+};
+
+G_DEFINE_TYPE(NmcForegroundNotification, nmc_foreground_notification, G_TYPE_OBJECT)
+
+static void nmc_foreground_notification_dispose(GObject* object) {
+  NmcForegroundNotification* self = NMC_FOREGROUND_NOTIFICATION(object);
+  g_clear_pointer(&self->title, g_free);
+  g_clear_pointer(&self->text, g_free);
+  g_clear_pointer(&self->icon_resource, g_free);
+  g_clear_pointer(&self->channel_name, g_free);
+  G_OBJECT_CLASS(nmc_foreground_notification_parent_class)->dispose(object);
+}
+
+static void nmc_foreground_notification_init(NmcForegroundNotification* self) {
+}
+
+static void nmc_foreground_notification_class_init(NmcForegroundNotificationClass* klass) {
+  G_OBJECT_CLASS(klass)->dispose = nmc_foreground_notification_dispose;
+}
+
+NmcForegroundNotification* nmc_foreground_notification_new(const gchar* title, const gchar* text, const gchar* icon_resource, const gchar* channel_name) {
+  NmcForegroundNotification* self = NMC_FOREGROUND_NOTIFICATION(g_object_new(nmc_foreground_notification_get_type(), nullptr));
+  self->title = g_strdup(title);
+  if (text != nullptr) {
+    self->text = g_strdup(text);
+  }
+  else {
+    self->text = nullptr;
+  }
+  if (icon_resource != nullptr) {
+    self->icon_resource = g_strdup(icon_resource);
+  }
+  else {
+    self->icon_resource = nullptr;
+  }
+  self->channel_name = g_strdup(channel_name);
+  return self;
+}
+
+const gchar* nmc_foreground_notification_get_title(NmcForegroundNotification* self) {
+  g_return_val_if_fail(NMC_IS_FOREGROUND_NOTIFICATION(self), nullptr);
+  return self->title;
+}
+
+const gchar* nmc_foreground_notification_get_text(NmcForegroundNotification* self) {
+  g_return_val_if_fail(NMC_IS_FOREGROUND_NOTIFICATION(self), nullptr);
+  return self->text;
+}
+
+const gchar* nmc_foreground_notification_get_icon_resource(NmcForegroundNotification* self) {
+  g_return_val_if_fail(NMC_IS_FOREGROUND_NOTIFICATION(self), nullptr);
+  return self->icon_resource;
+}
+
+const gchar* nmc_foreground_notification_get_channel_name(NmcForegroundNotification* self) {
+  g_return_val_if_fail(NMC_IS_FOREGROUND_NOTIFICATION(self), nullptr);
+  return self->channel_name;
+}
+
+static FlValue* nmc_foreground_notification_to_list(NmcForegroundNotification* self) {
+  FlValue* values = fl_value_new_list();
+  fl_value_append_take(values, fl_value_new_string(self->title));
+  fl_value_append_take(values, self->text != nullptr ? fl_value_new_string(self->text) : fl_value_new_null());
+  fl_value_append_take(values, self->icon_resource != nullptr ? fl_value_new_string(self->icon_resource) : fl_value_new_null());
+  fl_value_append_take(values, fl_value_new_string(self->channel_name));
+  return values;
+}
+
+static NmcForegroundNotification* nmc_foreground_notification_new_from_list(FlValue* values) {
+  FlValue* value0 = fl_value_get_list_value(values, 0);
+  const gchar* title = fl_value_get_string(value0);
+  FlValue* value1 = fl_value_get_list_value(values, 1);
+  const gchar* text = nullptr;
+  if (fl_value_get_type(value1) != FL_VALUE_TYPE_NULL) {
+    text = fl_value_get_string(value1);
+  }
+  FlValue* value2 = fl_value_get_list_value(values, 2);
+  const gchar* icon_resource = nullptr;
+  if (fl_value_get_type(value2) != FL_VALUE_TYPE_NULL) {
+    icon_resource = fl_value_get_string(value2);
+  }
+  FlValue* value3 = fl_value_get_list_value(values, 3);
+  const gchar* channel_name = fl_value_get_string(value3);
+  return nmc_foreground_notification_new(title, text, icon_resource, channel_name);
+}
+
+gboolean nmc_foreground_notification_equals(NmcForegroundNotification* a, NmcForegroundNotification* b) {
+  if (a == b) {
+    return TRUE;
+  }
+  if (a == nullptr || b == nullptr) {
+    return FALSE;
+  }
+  if (g_strcmp0(a->title, b->title) != 0) {
+    return FALSE;
+  }
+  if (g_strcmp0(a->text, b->text) != 0) {
+    return FALSE;
+  }
+  if (g_strcmp0(a->icon_resource, b->icon_resource) != 0) {
+    return FALSE;
+  }
+  if (g_strcmp0(a->channel_name, b->channel_name) != 0) {
+    return FALSE;
+  }
+  return TRUE;
+}
+
+guint nmc_foreground_notification_hash(NmcForegroundNotification* self) {
+  g_return_val_if_fail(NMC_IS_FOREGROUND_NOTIFICATION(self), 0);
+  guint result = 0;
+  result = result * 31 + (self->title != nullptr ? g_str_hash(self->title) : 0);
+  result = result * 31 + (self->text != nullptr ? g_str_hash(self->text) : 0);
+  result = result * 31 + (self->icon_resource != nullptr ? g_str_hash(self->icon_resource) : 0);
+  result = result * 31 + (self->channel_name != nullptr ? g_str_hash(self->channel_name) : 0);
   return result;
 }
 
@@ -1410,9 +1549,10 @@ const int nmc_video_codec_type_id = 131;
 const int nmc_video_request_type_id = 132;
 const int nmc_thumbnail_request_type_id = 133;
 const int nmc_image_request_type_id = 134;
-const int nmc_compression_reply_type_id = 135;
-const int nmc_image_probe_type_id = 136;
-const int nmc_video_probe_type_id = 137;
+const int nmc_foreground_notification_type_id = 135;
+const int nmc_compression_reply_type_id = 136;
+const int nmc_image_probe_type_id = 137;
+const int nmc_video_probe_type_id = 138;
 
 static gboolean nmc_message_codec_write_nmc_compression_status(FlStandardMessageCodec* codec, GByteArray* buffer, FlValue* value, GError** error) {
   uint8_t type = nmc_compression_status_type_id;
@@ -1453,6 +1593,13 @@ static gboolean nmc_message_codec_write_nmc_image_request(FlStandardMessageCodec
   return fl_standard_message_codec_write_value(codec, buffer, values, error);
 }
 
+static gboolean nmc_message_codec_write_nmc_foreground_notification(FlStandardMessageCodec* codec, GByteArray* buffer, NmcForegroundNotification* value, GError** error) {
+  uint8_t type = nmc_foreground_notification_type_id;
+  g_byte_array_append(buffer, &type, sizeof(uint8_t));
+  g_autoptr(FlValue) values = nmc_foreground_notification_to_list(value);
+  return fl_standard_message_codec_write_value(codec, buffer, values, error);
+}
+
 static gboolean nmc_message_codec_write_nmc_compression_reply(FlStandardMessageCodec* codec, GByteArray* buffer, NmcCompressionReply* value, GError** error) {
   uint8_t type = nmc_compression_reply_type_id;
   g_byte_array_append(buffer, &type, sizeof(uint8_t));
@@ -1489,6 +1636,8 @@ static gboolean nmc_message_codec_write_value(FlStandardMessageCodec* codec, GBy
         return nmc_message_codec_write_nmc_thumbnail_request(codec, buffer, NMC_THUMBNAIL_REQUEST(fl_value_get_custom_value_object(value)), error);
       case nmc_image_request_type_id:
         return nmc_message_codec_write_nmc_image_request(codec, buffer, NMC_IMAGE_REQUEST(fl_value_get_custom_value_object(value)), error);
+      case nmc_foreground_notification_type_id:
+        return nmc_message_codec_write_nmc_foreground_notification(codec, buffer, NMC_FOREGROUND_NOTIFICATION(fl_value_get_custom_value_object(value)), error);
       case nmc_compression_reply_type_id:
         return nmc_message_codec_write_nmc_compression_reply(codec, buffer, NMC_COMPRESSION_REPLY(fl_value_get_custom_value_object(value)), error);
       case nmc_image_probe_type_id:
@@ -1558,6 +1707,21 @@ static FlValue* nmc_message_codec_read_nmc_image_request(FlStandardMessageCodec*
   return fl_value_new_custom_object(nmc_image_request_type_id, G_OBJECT(value));
 }
 
+static FlValue* nmc_message_codec_read_nmc_foreground_notification(FlStandardMessageCodec* codec, GBytes* buffer, size_t* offset, GError** error) {
+  g_autoptr(FlValue) values = fl_standard_message_codec_read_value(codec, buffer, offset, error);
+  if (values == nullptr) {
+    return nullptr;
+  }
+
+  g_autoptr(NmcForegroundNotification) value = nmc_foreground_notification_new_from_list(values);
+  if (value == nullptr) {
+    g_set_error(error, FL_MESSAGE_CODEC_ERROR, FL_MESSAGE_CODEC_ERROR_FAILED, "Invalid data received for MessageData");
+    return nullptr;
+  }
+
+  return fl_value_new_custom_object(nmc_foreground_notification_type_id, G_OBJECT(value));
+}
+
 static FlValue* nmc_message_codec_read_nmc_compression_reply(FlStandardMessageCodec* codec, GBytes* buffer, size_t* offset, GError** error) {
   g_autoptr(FlValue) values = fl_standard_message_codec_read_value(codec, buffer, offset, error);
   if (values == nullptr) {
@@ -1617,6 +1781,8 @@ static FlValue* nmc_message_codec_read_value_of_type(FlStandardMessageCodec* cod
       return nmc_message_codec_read_nmc_thumbnail_request(codec, buffer, offset, error);
     case nmc_image_request_type_id:
       return nmc_message_codec_read_nmc_image_request(codec, buffer, offset, error);
+    case nmc_foreground_notification_type_id:
+      return nmc_message_codec_read_nmc_foreground_notification(codec, buffer, offset, error);
     case nmc_compression_reply_type_id:
       return nmc_message_codec_read_nmc_compression_reply(codec, buffer, offset, error);
     case nmc_image_probe_type_id:
@@ -1903,6 +2069,43 @@ static NmcMediaCompressorHostApiVideoThumbnailResponse* nmc_media_compressor_hos
   return self;
 }
 
+struct _NmcMediaCompressorHostApiSetForegroundNotificationResponse {
+  GObject parent_instance;
+
+  FlValue* value;
+};
+
+G_DEFINE_TYPE(NmcMediaCompressorHostApiSetForegroundNotificationResponse, nmc_media_compressor_host_api_set_foreground_notification_response, G_TYPE_OBJECT)
+
+static void nmc_media_compressor_host_api_set_foreground_notification_response_dispose(GObject* object) {
+  NmcMediaCompressorHostApiSetForegroundNotificationResponse* self = NMC_MEDIA_COMPRESSOR_HOST_API_SET_FOREGROUND_NOTIFICATION_RESPONSE(object);
+  g_clear_pointer(&self->value, fl_value_unref);
+  G_OBJECT_CLASS(nmc_media_compressor_host_api_set_foreground_notification_response_parent_class)->dispose(object);
+}
+
+static void nmc_media_compressor_host_api_set_foreground_notification_response_init(NmcMediaCompressorHostApiSetForegroundNotificationResponse* self) {
+}
+
+static void nmc_media_compressor_host_api_set_foreground_notification_response_class_init(NmcMediaCompressorHostApiSetForegroundNotificationResponseClass* klass) {
+  G_OBJECT_CLASS(klass)->dispose = nmc_media_compressor_host_api_set_foreground_notification_response_dispose;
+}
+
+NmcMediaCompressorHostApiSetForegroundNotificationResponse* nmc_media_compressor_host_api_set_foreground_notification_response_new() {
+  NmcMediaCompressorHostApiSetForegroundNotificationResponse* self = NMC_MEDIA_COMPRESSOR_HOST_API_SET_FOREGROUND_NOTIFICATION_RESPONSE(g_object_new(nmc_media_compressor_host_api_set_foreground_notification_response_get_type(), nullptr));
+  self->value = fl_value_new_list();
+  fl_value_append_take(self->value, fl_value_new_null());
+  return self;
+}
+
+NmcMediaCompressorHostApiSetForegroundNotificationResponse* nmc_media_compressor_host_api_set_foreground_notification_response_new_error(const gchar* code, const gchar* message, FlValue* details) {
+  NmcMediaCompressorHostApiSetForegroundNotificationResponse* self = NMC_MEDIA_COMPRESSOR_HOST_API_SET_FOREGROUND_NOTIFICATION_RESPONSE(g_object_new(nmc_media_compressor_host_api_set_foreground_notification_response_get_type(), nullptr));
+  self->value = fl_value_new_list();
+  fl_value_append_take(self->value, fl_value_new_string(code));
+  fl_value_append_take(self->value, fl_value_new_string(message != nullptr ? message : ""));
+  fl_value_append_take(self->value, details != nullptr ? fl_value_ref(details) : fl_value_new_null());
+  return self;
+}
+
 struct _NmcMediaCompressorHostApi {
   GObject parent_instance;
 
@@ -2025,6 +2228,27 @@ static void nmc_media_compressor_host_api_video_thumbnail_cb(FlBasicMessageChann
   self->vtable->video_thumbnail(request, handle, self->user_data);
 }
 
+static void nmc_media_compressor_host_api_set_foreground_notification_cb(FlBasicMessageChannel* channel, FlValue* message_, FlBasicMessageChannelResponseHandle* response_handle, gpointer user_data) {
+  NmcMediaCompressorHostApi* self = NMC_MEDIA_COMPRESSOR_HOST_API(user_data);
+
+  if (self->vtable == nullptr || self->vtable->set_foreground_notification == nullptr) {
+    return;
+  }
+
+  FlValue* value0 = fl_value_get_list_value(message_, 0);
+  NmcForegroundNotification* notification = NMC_FOREGROUND_NOTIFICATION(fl_value_get_custom_value_object(value0));
+  g_autoptr(NmcMediaCompressorHostApiSetForegroundNotificationResponse) response = self->vtable->set_foreground_notification(notification, self->user_data);
+  if (response == nullptr) {
+    g_warning("No response returned to %s.%s", "MediaCompressorHostApi", "setForegroundNotification");
+    return;
+  }
+
+  g_autoptr(GError) error = NULL;
+  if (!fl_basic_message_channel_respond(channel, response_handle, response->value, &error)) {
+    g_warning("Failed to send response to %s.%s: %s", "MediaCompressorHostApi", "setForegroundNotification", error->message);
+  }
+}
+
 void nmc_media_compressor_host_api_set_method_handlers(FlBinaryMessenger* messenger, const gchar* suffix, const NmcMediaCompressorHostApiVTable* vtable, gpointer user_data, GDestroyNotify user_data_free_func) {
   g_autofree gchar* dot_suffix = suffix != nullptr ? g_strdup_printf(".%s", suffix) : g_strdup("");
   g_autoptr(NmcMediaCompressorHostApi) api_data = nmc_media_compressor_host_api_new(vtable, user_data, user_data_free_func);
@@ -2048,6 +2272,9 @@ void nmc_media_compressor_host_api_set_method_handlers(FlBinaryMessenger* messen
   g_autofree gchar* video_thumbnail_channel_name = g_strdup_printf("dev.flutter.pigeon.native_media_compressor.MediaCompressorHostApi.videoThumbnail%s", dot_suffix);
   g_autoptr(FlBasicMessageChannel) video_thumbnail_channel = fl_basic_message_channel_new(messenger, video_thumbnail_channel_name, FL_MESSAGE_CODEC(codec));
   fl_basic_message_channel_set_message_handler(video_thumbnail_channel, nmc_media_compressor_host_api_video_thumbnail_cb, g_object_ref(api_data), g_object_unref);
+  g_autofree gchar* set_foreground_notification_channel_name = g_strdup_printf("dev.flutter.pigeon.native_media_compressor.MediaCompressorHostApi.setForegroundNotification%s", dot_suffix);
+  g_autoptr(FlBasicMessageChannel) set_foreground_notification_channel = fl_basic_message_channel_new(messenger, set_foreground_notification_channel_name, FL_MESSAGE_CODEC(codec));
+  fl_basic_message_channel_set_message_handler(set_foreground_notification_channel, nmc_media_compressor_host_api_set_foreground_notification_cb, g_object_ref(api_data), g_object_unref);
 }
 
 void nmc_media_compressor_host_api_clear_method_handlers(FlBinaryMessenger* messenger, const gchar* suffix) {
@@ -2072,6 +2299,9 @@ void nmc_media_compressor_host_api_clear_method_handlers(FlBinaryMessenger* mess
   g_autofree gchar* video_thumbnail_channel_name = g_strdup_printf("dev.flutter.pigeon.native_media_compressor.MediaCompressorHostApi.videoThumbnail%s", dot_suffix);
   g_autoptr(FlBasicMessageChannel) video_thumbnail_channel = fl_basic_message_channel_new(messenger, video_thumbnail_channel_name, FL_MESSAGE_CODEC(codec));
   fl_basic_message_channel_set_message_handler(video_thumbnail_channel, nullptr, nullptr, nullptr);
+  g_autofree gchar* set_foreground_notification_channel_name = g_strdup_printf("dev.flutter.pigeon.native_media_compressor.MediaCompressorHostApi.setForegroundNotification%s", dot_suffix);
+  g_autoptr(FlBasicMessageChannel) set_foreground_notification_channel = fl_basic_message_channel_new(messenger, set_foreground_notification_channel_name, FL_MESSAGE_CODEC(codec));
+  fl_basic_message_channel_set_message_handler(set_foreground_notification_channel, nullptr, nullptr, nullptr);
 }
 
 void nmc_media_compressor_host_api_respond_compress_video(NmcMediaCompressorHostApiResponseHandle* response_handle, NmcCompressionReply* return_value) {

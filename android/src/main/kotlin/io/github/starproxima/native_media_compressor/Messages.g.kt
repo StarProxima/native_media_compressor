@@ -212,7 +212,9 @@ enum class CompressionStatus(val raw: Int) {
 
 enum class ImageFormat(val raw: Int) {
   JPEG(0),
-  PNG(1);
+  PNG(1),
+  WEBP(2),
+  HEIC(3);
 
   companion object {
     fun ofRaw(raw: Int): ImageFormat? {
@@ -398,7 +400,12 @@ data class ImageRequest (
   val maxShortSide: Long? = null,
   val maxLongSide: Long? = null,
   val format: ImageFormat,
-  val quality: Long
+  val quality: Long,
+  /**
+   * Copy EXIF and other metadata of the source, location included, except
+   * the orientation, which is applied to the pixels.
+   */
+  val keepMetadata: Boolean
 )
  {
   companion object {
@@ -409,7 +416,8 @@ data class ImageRequest (
       val maxLongSide = pigeonVar_list[3] as Long?
       val format = pigeonVar_list[4] as ImageFormat
       val quality = pigeonVar_list[5] as Long
-      return ImageRequest(source, destination, maxShortSide, maxLongSide, format, quality)
+      val keepMetadata = pigeonVar_list[6] as Boolean
+      return ImageRequest(source, destination, maxShortSide, maxLongSide, format, quality, keepMetadata)
     }
   }
   fun toList(): List<Any?> {
@@ -420,6 +428,7 @@ data class ImageRequest (
       maxLongSide,
       format,
       quality,
+      keepMetadata,
     )
   }
   override fun equals(other: Any?): Boolean {
@@ -430,7 +439,7 @@ data class ImageRequest (
       return true
     }
     val other = other as ImageRequest
-    return MessagesPigeonUtils.deepEquals(this.source, other.source) && MessagesPigeonUtils.deepEquals(this.destination, other.destination) && MessagesPigeonUtils.deepEquals(this.maxShortSide, other.maxShortSide) && MessagesPigeonUtils.deepEquals(this.maxLongSide, other.maxLongSide) && MessagesPigeonUtils.deepEquals(this.format, other.format) && MessagesPigeonUtils.deepEquals(this.quality, other.quality)
+    return MessagesPigeonUtils.deepEquals(this.source, other.source) && MessagesPigeonUtils.deepEquals(this.destination, other.destination) && MessagesPigeonUtils.deepEquals(this.maxShortSide, other.maxShortSide) && MessagesPigeonUtils.deepEquals(this.maxLongSide, other.maxLongSide) && MessagesPigeonUtils.deepEquals(this.format, other.format) && MessagesPigeonUtils.deepEquals(this.quality, other.quality) && MessagesPigeonUtils.deepEquals(this.keepMetadata, other.keepMetadata)
   }
 
   override fun hashCode(): Int {
@@ -441,6 +450,62 @@ data class ImageRequest (
     result = 31 * result + MessagesPigeonUtils.deepHash(this.maxLongSide)
     result = 31 * result + MessagesPigeonUtils.deepHash(this.format)
     result = 31 * result + MessagesPigeonUtils.deepHash(this.quality)
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.keepMetadata)
+    return result
+  }
+}
+
+/**
+ * The notification an Android foreground service shows while videos are
+ * compressed in it.
+ *
+ * Generated class from Pigeon that represents data sent in messages.
+ */
+data class ForegroundNotification (
+  val title: String,
+  val text: String? = null,
+  /**
+   * Name of a drawable resource of the app for the small icon; null uses
+   * the app icon.
+   */
+  val iconResource: String? = null,
+  val channelName: String
+)
+ {
+  companion object {
+    fun fromList(pigeonVar_list: List<Any?>): ForegroundNotification {
+      val title = pigeonVar_list[0] as String
+      val text = pigeonVar_list[1] as String?
+      val iconResource = pigeonVar_list[2] as String?
+      val channelName = pigeonVar_list[3] as String
+      return ForegroundNotification(title, text, iconResource, channelName)
+    }
+  }
+  fun toList(): List<Any?> {
+    return listOf(
+      title,
+      text,
+      iconResource,
+      channelName,
+    )
+  }
+  override fun equals(other: Any?): Boolean {
+    if (other == null || other.javaClass != javaClass) {
+      return false
+    }
+    if (this === other) {
+      return true
+    }
+    val other = other as ForegroundNotification
+    return MessagesPigeonUtils.deepEquals(this.title, other.title) && MessagesPigeonUtils.deepEquals(this.text, other.text) && MessagesPigeonUtils.deepEquals(this.iconResource, other.iconResource) && MessagesPigeonUtils.deepEquals(this.channelName, other.channelName)
+  }
+
+  override fun hashCode(): Int {
+    var result = javaClass.hashCode()
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.title)
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.text)
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.iconResource)
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.channelName)
     return result
   }
 }
@@ -654,15 +719,20 @@ private open class MessagesPigeonCodec : StandardMessageCodec() {
       }
       135.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          CompressionReply.fromList(it)
+          ForegroundNotification.fromList(it)
         }
       }
       136.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          ImageProbe.fromList(it)
+          CompressionReply.fromList(it)
         }
       }
       137.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
+          ImageProbe.fromList(it)
+        }
+      }
+      138.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
           VideoProbe.fromList(it)
         }
@@ -696,16 +766,20 @@ private open class MessagesPigeonCodec : StandardMessageCodec() {
         stream.write(134)
         writeValue(stream, value.toList())
       }
-      is CompressionReply -> {
+      is ForegroundNotification -> {
         stream.write(135)
         writeValue(stream, value.toList())
       }
-      is ImageProbe -> {
+      is CompressionReply -> {
         stream.write(136)
         writeValue(stream, value.toList())
       }
-      is VideoProbe -> {
+      is ImageProbe -> {
         stream.write(137)
+        writeValue(stream, value.toList())
+      }
+      is VideoProbe -> {
+        stream.write(138)
         writeValue(stream, value.toList())
       }
       else -> super.writeValue(stream, value)
@@ -722,6 +796,12 @@ interface MediaCompressorHostApi {
   fun probeImage(source: String, callback: (Result<ImageProbe?>) -> Unit)
   fun probeVideo(source: String, callback: (Result<VideoProbe?>) -> Unit)
   fun videoThumbnail(request: ThumbnailRequest, callback: (Result<CompressionReply>) -> Unit)
+  /**
+   * Runs later video compressions in an Android foreground service showing
+   * [notification], or stops doing so when it is null. Other platforms
+   * ignore it.
+   */
+  fun setForegroundNotification(notification: ForegroundNotification?)
 
   companion object {
     /** The codec used by MediaCompressorHostApi. */
@@ -846,6 +926,24 @@ interface MediaCompressorHostApi {
                 reply.reply(MessagesPigeonUtils.wrapResult(data))
               }
             }
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_media_compressor.MediaCompressorHostApi.setForegroundNotification$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { message, reply ->
+            val args = message as List<Any?>
+            val notificationArg = args[0] as ForegroundNotification?
+            val wrapped: List<Any?> = try {
+              api.setForegroundNotification(notificationArg)
+              listOf(null)
+            } catch (exception: Throwable) {
+              MessagesPigeonUtils.wrapError(exception)
+            }
+            reply.reply(wrapped)
           }
         } else {
           channel.setMessageHandler(null)

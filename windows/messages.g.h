@@ -68,7 +68,9 @@ enum class CompressionStatus {
 
 enum class ImageFormat {
   kJpeg = 0,
-  kPng = 1
+  kPng = 1,
+  kWebp = 2,
+  kHeic = 3
 };
 
 // Codec of the output video track.
@@ -260,7 +262,8 @@ class ImageRequest {
     const std::string& source,
     const std::string& destination,
     const ImageFormat& format,
-    int64_t quality);
+    int64_t quality,
+    bool keep_metadata);
 
   // Constructs an object setting all fields.
   explicit ImageRequest(
@@ -269,7 +272,8 @@ class ImageRequest {
     const int64_t* max_short_side,
     const int64_t* max_long_side,
     const ImageFormat& format,
-    int64_t quality);
+    int64_t quality,
+    bool keep_metadata);
 
   const std::string& source() const;
   void set_source(std::string_view value_arg);
@@ -291,6 +295,11 @@ class ImageRequest {
   int64_t quality() const;
   void set_quality(int64_t value_arg);
 
+  // Copy EXIF and other metadata of the source, location included, except
+  // the orientation, which is applied to the pixels.
+  bool keep_metadata() const;
+  void set_keep_metadata(bool value_arg);
+
   bool operator==(const ImageRequest& other) const;
   bool operator!=(const ImageRequest& other) const;
   /// Returns a hash code value for the object. This method is supported for the benefit of hash tables.
@@ -307,6 +316,58 @@ class ImageRequest {
   std::optional<int64_t> max_long_side_;
   ImageFormat format_;
   int64_t quality_;
+  bool keep_metadata_;
+};
+
+
+// The notification an Android foreground service shows while videos are
+// compressed in it.
+//
+// Generated class from Pigeon that represents data sent in messages.
+class ForegroundNotification {
+ public:
+  // Constructs an object setting all non-nullable fields.
+  explicit ForegroundNotification(
+    const std::string& title,
+    const std::string& channel_name);
+
+  // Constructs an object setting all fields.
+  explicit ForegroundNotification(
+    const std::string& title,
+    const std::string* text,
+    const std::string* icon_resource,
+    const std::string& channel_name);
+
+  const std::string& title() const;
+  void set_title(std::string_view value_arg);
+
+  const std::string* text() const;
+  void set_text(const std::string_view* value_arg);
+  void set_text(std::string_view value_arg);
+
+  // Name of a drawable resource of the app for the small icon; null uses
+  // the app icon.
+  const std::string* icon_resource() const;
+  void set_icon_resource(const std::string_view* value_arg);
+  void set_icon_resource(std::string_view value_arg);
+
+  const std::string& channel_name() const;
+  void set_channel_name(std::string_view value_arg);
+
+  bool operator==(const ForegroundNotification& other) const;
+  bool operator!=(const ForegroundNotification& other) const;
+  /// Returns a hash code value for the object. This method is supported for the benefit of hash tables.
+  size_t Hash() const;
+ private:
+  static ForegroundNotification FromEncodableList(const ::flutter::EncodableList& list);
+  ::flutter::EncodableList ToEncodableList() const;
+  friend class MediaCompressorHostApi;
+  friend class MediaCompressorFlutterApi;
+  friend class PigeonInternalCodecSerializer;
+  std::string title_;
+  std::optional<std::string> text_;
+  std::optional<std::string> icon_resource_;
+  std::string channel_name_;
 };
 
 
@@ -538,6 +599,10 @@ class MediaCompressorHostApi {
   virtual void VideoThumbnail(
     const ThumbnailRequest& request,
     std::function<void(ErrorOr<CompressionReply> reply)> result) = 0;
+  // Runs later video compressions in an Android foreground service showing
+  // [notification], or stops doing so when it is null. Other platforms
+  // ignore it.
+  virtual std::optional<FlutterError> SetForegroundNotification(const ForegroundNotification* notification) = 0;
 
   // The codec used by MediaCompressorHostApi.
   static const ::flutter::StandardMessageCodec& GetCodec();

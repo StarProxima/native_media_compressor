@@ -659,11 +659,13 @@ ImageRequest::ImageRequest(
   const std::string& source,
   const std::string& destination,
   const ImageFormat& format,
-  int64_t quality)
+  int64_t quality,
+  bool keep_metadata)
  : source_(source),
     destination_(destination),
     format_(format),
-    quality_(quality) {}
+    quality_(quality),
+    keep_metadata_(keep_metadata) {}
 
 ImageRequest::ImageRequest(
   const std::string& source,
@@ -671,13 +673,15 @@ ImageRequest::ImageRequest(
   const int64_t* max_short_side,
   const int64_t* max_long_side,
   const ImageFormat& format,
-  int64_t quality)
+  int64_t quality,
+  bool keep_metadata)
  : source_(source),
     destination_(destination),
     max_short_side_(max_short_side ? std::optional<int64_t>(*max_short_side) : std::nullopt),
     max_long_side_(max_long_side ? std::optional<int64_t>(*max_long_side) : std::nullopt),
     format_(format),
-    quality_(quality) {}
+    quality_(quality),
+    keep_metadata_(keep_metadata) {}
 
 const std::string& ImageRequest::source() const {
   return source_;
@@ -741,15 +745,25 @@ void ImageRequest::set_quality(int64_t value_arg) {
 }
 
 
+bool ImageRequest::keep_metadata() const {
+  return keep_metadata_;
+}
+
+void ImageRequest::set_keep_metadata(bool value_arg) {
+  keep_metadata_ = value_arg;
+}
+
+
 EncodableList ImageRequest::ToEncodableList() const {
   EncodableList list;
-  list.reserve(6);
+  list.reserve(7);
   list.push_back(EncodableValue(source_));
   list.push_back(EncodableValue(destination_));
   list.push_back(max_short_side_ ? EncodableValue(*max_short_side_) : EncodableValue());
   list.push_back(max_long_side_ ? EncodableValue(*max_long_side_) : EncodableValue());
   list.push_back(CustomEncodableValue(format_));
   list.push_back(EncodableValue(quality_));
+  list.push_back(EncodableValue(keep_metadata_));
   return list;
 }
 
@@ -758,7 +772,8 @@ ImageRequest ImageRequest::FromEncodableList(const EncodableList& list) {
     std::get<std::string>(list[0]),
     std::get<std::string>(list[1]),
     std::any_cast<const ImageFormat&>(std::get<CustomEncodableValue>(list[4])),
-    std::get<int64_t>(list[5]));
+    std::get<int64_t>(list[5]),
+    std::get<bool>(list[6]));
   auto& encodable_max_short_side = list[2];
   if (!encodable_max_short_side.IsNull()) {
     decoded.set_max_short_side(std::get<int64_t>(encodable_max_short_side));
@@ -771,7 +786,7 @@ ImageRequest ImageRequest::FromEncodableList(const EncodableList& list) {
 }
 
 bool ImageRequest::operator==(const ImageRequest& other) const {
-  return PigeonInternalDeepEquals(source_, other.source_) && PigeonInternalDeepEquals(destination_, other.destination_) && PigeonInternalDeepEquals(max_short_side_, other.max_short_side_) && PigeonInternalDeepEquals(max_long_side_, other.max_long_side_) && PigeonInternalDeepEquals(format_, other.format_) && PigeonInternalDeepEquals(quality_, other.quality_);
+  return PigeonInternalDeepEquals(source_, other.source_) && PigeonInternalDeepEquals(destination_, other.destination_) && PigeonInternalDeepEquals(max_short_side_, other.max_short_side_) && PigeonInternalDeepEquals(max_long_side_, other.max_long_side_) && PigeonInternalDeepEquals(format_, other.format_) && PigeonInternalDeepEquals(quality_, other.quality_) && PigeonInternalDeepEquals(keep_metadata_, other.keep_metadata_);
 }
 
 bool ImageRequest::operator!=(const ImageRequest& other) const {
@@ -786,10 +801,119 @@ size_t ImageRequest::Hash() const {
   result = result * 31 + PigeonInternalDeepHash(max_long_side_);
   result = result * 31 + PigeonInternalDeepHash(format_);
   result = result * 31 + PigeonInternalDeepHash(quality_);
+  result = result * 31 + PigeonInternalDeepHash(keep_metadata_);
   return result;
 }
 
 size_t PigeonInternalDeepHash(const ImageRequest& v) {
+  return v.Hash();
+}
+
+// ForegroundNotification
+
+ForegroundNotification::ForegroundNotification(
+  const std::string& title,
+  const std::string& channel_name)
+ : title_(title),
+    channel_name_(channel_name) {}
+
+ForegroundNotification::ForegroundNotification(
+  const std::string& title,
+  const std::string* text,
+  const std::string* icon_resource,
+  const std::string& channel_name)
+ : title_(title),
+    text_(text ? std::optional<std::string>(*text) : std::nullopt),
+    icon_resource_(icon_resource ? std::optional<std::string>(*icon_resource) : std::nullopt),
+    channel_name_(channel_name) {}
+
+const std::string& ForegroundNotification::title() const {
+  return title_;
+}
+
+void ForegroundNotification::set_title(std::string_view value_arg) {
+  title_ = value_arg;
+}
+
+
+const std::string* ForegroundNotification::text() const {
+  return text_ ? &(*text_) : nullptr;
+}
+
+void ForegroundNotification::set_text(const std::string_view* value_arg) {
+  text_ = value_arg ? std::optional<std::string>(*value_arg) : std::nullopt;
+}
+
+void ForegroundNotification::set_text(std::string_view value_arg) {
+  text_ = value_arg;
+}
+
+
+const std::string* ForegroundNotification::icon_resource() const {
+  return icon_resource_ ? &(*icon_resource_) : nullptr;
+}
+
+void ForegroundNotification::set_icon_resource(const std::string_view* value_arg) {
+  icon_resource_ = value_arg ? std::optional<std::string>(*value_arg) : std::nullopt;
+}
+
+void ForegroundNotification::set_icon_resource(std::string_view value_arg) {
+  icon_resource_ = value_arg;
+}
+
+
+const std::string& ForegroundNotification::channel_name() const {
+  return channel_name_;
+}
+
+void ForegroundNotification::set_channel_name(std::string_view value_arg) {
+  channel_name_ = value_arg;
+}
+
+
+EncodableList ForegroundNotification::ToEncodableList() const {
+  EncodableList list;
+  list.reserve(4);
+  list.push_back(EncodableValue(title_));
+  list.push_back(text_ ? EncodableValue(*text_) : EncodableValue());
+  list.push_back(icon_resource_ ? EncodableValue(*icon_resource_) : EncodableValue());
+  list.push_back(EncodableValue(channel_name_));
+  return list;
+}
+
+ForegroundNotification ForegroundNotification::FromEncodableList(const EncodableList& list) {
+  ForegroundNotification decoded(
+    std::get<std::string>(list[0]),
+    std::get<std::string>(list[3]));
+  auto& encodable_text = list[1];
+  if (!encodable_text.IsNull()) {
+    decoded.set_text(std::get<std::string>(encodable_text));
+  }
+  auto& encodable_icon_resource = list[2];
+  if (!encodable_icon_resource.IsNull()) {
+    decoded.set_icon_resource(std::get<std::string>(encodable_icon_resource));
+  }
+  return decoded;
+}
+
+bool ForegroundNotification::operator==(const ForegroundNotification& other) const {
+  return PigeonInternalDeepEquals(title_, other.title_) && PigeonInternalDeepEquals(text_, other.text_) && PigeonInternalDeepEquals(icon_resource_, other.icon_resource_) && PigeonInternalDeepEquals(channel_name_, other.channel_name_);
+}
+
+bool ForegroundNotification::operator!=(const ForegroundNotification& other) const {
+  return !(*this == other);
+}
+
+size_t ForegroundNotification::Hash() const {
+  size_t result = 1;
+  result = result * 31 + PigeonInternalDeepHash(title_);
+  result = result * 31 + PigeonInternalDeepHash(text_);
+  result = result * 31 + PigeonInternalDeepHash(icon_resource_);
+  result = result * 31 + PigeonInternalDeepHash(channel_name_);
+  return result;
+}
+
+size_t PigeonInternalDeepHash(const ForegroundNotification& v) {
   return v.Hash();
 }
 
@@ -1296,12 +1420,15 @@ EncodableValue PigeonInternalCodecSerializer::ReadValueOfType(
         return CustomEncodableValue(ImageRequest::FromEncodableList(std::get<EncodableList>(ReadValue(stream))));
       }
     case 135: {
-        return CustomEncodableValue(CompressionReply::FromEncodableList(std::get<EncodableList>(ReadValue(stream))));
+        return CustomEncodableValue(ForegroundNotification::FromEncodableList(std::get<EncodableList>(ReadValue(stream))));
       }
     case 136: {
-        return CustomEncodableValue(ImageProbe::FromEncodableList(std::get<EncodableList>(ReadValue(stream))));
+        return CustomEncodableValue(CompressionReply::FromEncodableList(std::get<EncodableList>(ReadValue(stream))));
       }
     case 137: {
+        return CustomEncodableValue(ImageProbe::FromEncodableList(std::get<EncodableList>(ReadValue(stream))));
+      }
+    case 138: {
         return CustomEncodableValue(VideoProbe::FromEncodableList(std::get<EncodableList>(ReadValue(stream))));
       }
     default:
@@ -1343,18 +1470,23 @@ void PigeonInternalCodecSerializer::WriteValue(
       WriteValue(EncodableValue(std::any_cast<ImageRequest>(*custom_value).ToEncodableList()), stream);
       return;
     }
-    if (custom_value->type() == typeid(CompressionReply)) {
+    if (custom_value->type() == typeid(ForegroundNotification)) {
       stream->WriteByte(135);
+      WriteValue(EncodableValue(std::any_cast<ForegroundNotification>(*custom_value).ToEncodableList()), stream);
+      return;
+    }
+    if (custom_value->type() == typeid(CompressionReply)) {
+      stream->WriteByte(136);
       WriteValue(EncodableValue(std::any_cast<CompressionReply>(*custom_value).ToEncodableList()), stream);
       return;
     }
     if (custom_value->type() == typeid(ImageProbe)) {
-      stream->WriteByte(136);
+      stream->WriteByte(137);
       WriteValue(EncodableValue(std::any_cast<ImageProbe>(*custom_value).ToEncodableList()), stream);
       return;
     }
     if (custom_value->type() == typeid(VideoProbe)) {
-      stream->WriteByte(137);
+      stream->WriteByte(138);
       WriteValue(EncodableValue(std::any_cast<VideoProbe>(*custom_value).ToEncodableList()), stream);
       return;
     }
@@ -1560,6 +1692,30 @@ void MediaCompressorHostApi::SetUp(
             wrapped.push_back(CustomEncodableValue(std::move(output).TakeValue()));
             reply(EncodableValue(std::move(wrapped)));
           });
+        } catch (const std::exception& exception) {
+          reply(WrapError(exception.what()));
+        }
+      });
+    } else {
+      channel.SetMessageHandler(nullptr);
+    }
+  }
+  {
+    BasicMessageChannel<> channel(binary_messenger, "dev.flutter.pigeon.native_media_compressor.MediaCompressorHostApi.setForegroundNotification" + prepended_suffix, &GetCodec());
+    if (api != nullptr) {
+      channel.SetMessageHandler([api](const EncodableValue& message, const ::flutter::MessageReply<EncodableValue>& reply) {
+        try {
+          const auto& args = std::get<EncodableList>(message);
+          const auto& encodable_notification_arg = args.at(0);
+          const auto* notification_arg = encodable_notification_arg.IsNull() ? nullptr : &(std::any_cast<const ForegroundNotification&>(std::get<CustomEncodableValue>(encodable_notification_arg)));
+          std::optional<FlutterError> output = api->SetForegroundNotification(notification_arg);
+          if (output.has_value()) {
+            reply(WrapError(output.value()));
+            return;
+          }
+          EncodableList wrapped;
+          wrapped.push_back(EncodableValue());
+          reply(EncodableValue(std::move(wrapped)));
         } catch (const std::exception& exception) {
           reply(WrapError(exception.what()));
         }
