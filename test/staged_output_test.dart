@@ -15,7 +15,9 @@ class _FakePlatform extends NativeMediaCompressorPlatform
   int Function(ImageOptions options) imageSize = (_) => 100;
 
   /// Output size for a video request.
-  int videoSize = 100;
+  int Function(VideoOptions options) videoSizeFor = (_) => 100;
+
+  set videoSize(int size) => videoSizeFor = (_) => size;
 
   VideoMetadata? metadata;
   final imageRequests = <(String, ImageOptions)>[];
@@ -47,14 +49,15 @@ class _FakePlatform extends NativeMediaCompressorPlatform
     required VideoOptions options,
   }) {
     videoRequests.add((destination, options));
-    File(destination).writeAsBytesSync(Uint8List(videoSize));
+    final size = videoSizeFor(options);
+    File(destination).writeAsBytesSync(Uint8List(size));
 
     return CompressionTask(
       result: Future.value(
         CompressionResult(
           status: CompressionStatus.compressed,
           path: destination,
-          sizeBytes: videoSize,
+          sizeBytes: size,
         ),
       ),
       progress: const Stream.empty(),
@@ -258,6 +261,33 @@ void main() {
           .length,
       before,
     );
+  });
+
+  test('a target the encoder misses gets a second pass', () async {
+    platform.metadata = const VideoMetadata(
+      width: 1920,
+      height: 1080,
+      rotationDegrees: 0,
+      duration: Duration(seconds: 10),
+      hasAudio: false,
+      isHdr: false,
+      bitrate: 50000000,
+    );
+    // An encoder that writes twice what it is asked for.
+    platform.videoSizeFor = (options) => options.videoBitrate! * 10 ~/ 8 * 2;
+    final destination = file('out.mp4');
+
+    final result =
+        await NativeMediaCompressor.compressVideo(
+          source: file('in.mp4', 10),
+          destination: destination,
+          options: const VideoOptions(targetBytes: 1000000),
+        ).result;
+
+    expect(platform.videoRequests, hasLength(2));
+    expect(result.sizeBytes, lessThanOrEqualTo(1000000));
+    expect(File(destination).lengthSync(), result.sizeBytes);
+    expect(entries(), ['in.mp4', 'out.mp4']);
   });
 
   test('estimate follows the probe', () async {

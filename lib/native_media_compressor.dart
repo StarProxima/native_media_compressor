@@ -306,24 +306,34 @@ final class _VideoJob {
     final minSavings = options.minSavingsPercent;
     final sourceBytes =
         minSavings == null ? null : await StagedFiles.sizeOf(source);
-    final isStaged = sourceBytes != null;
+    final targetBytes = metadata == null ? null : options.targetBytes;
+    final isStaged = sourceBytes != null || targetBytes != null;
     if (_isCancelled) {
       return const CompressionResult(status: CompressionStatus.cancelled);
     }
 
-    final task = platform.compressVideo(
-      source: source,
-      destination: isStaged ? StagedFiles.stagingFor(destination) : destination,
-      options: options.copyWith(
-        videoBitrate: VideoPlanning.videoBitrate(metadata, options),
-      ),
-    );
-    _task = task;
-    final forwarding = task.progress.listen(progress.add);
-    // A cancel that arrived while the task was being created.
-    if (_isCancelled) await task.cancel();
-    final result = await task.result;
-    await forwarding.cancel();
+    final bitrate = VideoPlanning.videoBitrate(metadata, options);
+    // A target may take a second pass, so the first one fills half the bar.
+    final share = targetBytes == null ? 1.0 : 0.5;
+    var result = await _pass(platform, bitrate, isStaged, share, 0);
+    if (targetBytes != null &&
+        result.isCompressed &&
+        !_isCancelled &&
+        VideoPlanning.missesTarget(result.sizeBytes ?? 0, targetBytes)) {
+      final retry = await _pass(
+        platform,
+        VideoPlanning.correctedBitrate(
+          bitrate,
+          outputBytes: result.sizeBytes!,
+          targetBytes: targetBytes,
+          audioBytes: VideoPlanning.audioBytes(metadata!, options),
+        ),
+        isStaged,
+        share,
+        share,
+      );
+      result = await _closer(result, retry, targetBytes);
+    }
     if (!isStaged || !result.isCompressed) return result;
 
     return NativeMediaCompressor._keep(
@@ -332,5 +342,48 @@ final class _VideoJob {
       sourceBytes: sourceBytes,
       minSavingsPercent: minSavings,
     );
+  }
+
+  /// One encode at [bitrate]; its progress fills [share] of the bar from
+  /// [offset].
+  Future<CompressionResult> _pass(
+    NativeMediaCompressorPlatform platform,
+    int bitrate,
+    bool isStaged,
+    double share,
+    double offset,
+  ) async {
+    final task = platform.compressVideo(
+      source: source,
+      destination: isStaged ? StagedFiles.stagingFor(destination) : destination,
+      options: options.copyWith(videoBitrate: bitrate),
+    );
+    _task = task;
+    final forwarding = task.progress.listen(
+      (value) => progress.add(offset + value * share),
+    );
+    // A cancel that arrived while the task was being created.
+    if (_isCancelled) await task.cancel();
+    final result = await task.result;
+    await forwarding.cancel();
+
+    return result;
+  }
+
+  /// Keeps whichever of two staged outputs fits [targetBytes] better and
+  /// drops the other.
+  static Future<CompressionResult> _closer(
+    CompressionResult first,
+    CompressionResult second,
+    int targetBytes,
+  ) async {
+    if (!second.isCompressed) return first;
+    final firstMiss = ((first.sizeBytes ?? 0) - targetBytes).abs();
+    final secondMiss = ((second.sizeBytes ?? 0) - targetBytes).abs();
+    final (kept, dropped) =
+        secondMiss <= firstMiss ? (second, first) : (first, second);
+    await StagedFiles.discard(dropped.path);
+
+    return kept;
   }
 }

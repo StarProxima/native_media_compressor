@@ -98,6 +98,38 @@ abstract final class VideoPlanning {
         .round();
   }
 
+  /// How far over the target an output may land before a second pass.
+  static const targetTolerance = 0.08;
+
+  /// Whether [outputBytes] lands too far above [targetBytes].
+  static bool missesTarget(int outputBytes, int targetBytes) =>
+      outputBytes > targetBytes * (1 + targetTolerance);
+
+  /// Bytes the copied or re-encoded audio of [source] is expected to take.
+  static int audioBytes(VideoMetadata source, VideoOptions options) {
+    if (!_keepsAudio(source, options)) return 0;
+    final seconds = keptDuration(source, options).inMilliseconds / 1000;
+
+    return (audioBitrate * seconds / 8).round();
+  }
+
+  /// Video bitrate for a second pass after [bitrate] produced [outputBytes]
+  /// for [targetBytes]: the encoder's miss is assumed to be proportional, and
+  /// only the video part of the file scales with the bitrate.
+  static int correctedBitrate(
+    int bitrate, {
+    required int outputBytes,
+    required int targetBytes,
+    required int audioBytes,
+  }) {
+    final videoOut = outputBytes - audioBytes;
+    final videoTarget = targetBytes - audioBytes;
+    if (videoOut <= 0 || videoTarget <= 0) return minVideoBitrate;
+    final corrected = (bitrate * videoTarget / videoOut * 0.95).round();
+
+    return math.max(corrected, minVideoBitrate);
+  }
+
   /// Length of the part of [source] that [options] keeps.
   static Duration keptDuration(VideoMetadata source, VideoOptions options) {
     final end =
