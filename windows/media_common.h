@@ -24,6 +24,8 @@ struct Outcome {
   int64_t height = 0;
   int64_t size_bytes = 0;
   std::string message;
+  // MIME type of the written video track; empty for images.
+  std::string video_codec;
 
   static Outcome Of(Status status, std::string message = {});
   static Outcome Failed(const char* step, HRESULT result);

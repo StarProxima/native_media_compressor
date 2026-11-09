@@ -128,6 +128,72 @@ void main() {
     });
   });
 
+  test('a second pass scales only the video part of the miss', () {
+    expect(VideoPlanning.missesTarget(1080, 1000), isFalse);
+    expect(VideoPlanning.missesTarget(1081, 1000), isTrue);
+    expect(
+      VideoPlanning.correctedBitrate(
+        1000000,
+        outputBytes: 2100000,
+        targetBytes: 1100000,
+        audioBytes: 100000,
+      ),
+      (1000000 * 1000000 / 2000000 * 0.95).round(),
+    );
+    expect(
+      VideoPlanning.correctedBitrate(
+        1000000,
+        outputBytes: 50,
+        targetBytes: 40,
+        audioBytes: 100,
+      ),
+      VideoPlanning.minVideoBitrate,
+    );
+  });
+
+  test('trimming and rotation change the planned output', () {
+    const options = VideoOptions(
+      trimStart: Duration(seconds: 5),
+      trimEnd: Duration(seconds: 15),
+      rotateQuarterTurns: 1,
+    );
+
+    expect(VideoPlanning.keptDuration(_phone, options), Duration(seconds: 10));
+    expect(VideoPlanning.outputSize(_phone, options), (1280, 720));
+    expect(
+      VideoPlanning.keptDuration(
+        _phone,
+        const VideoOptions(trimStart: Duration(minutes: 1)),
+      ),
+      Duration.zero,
+    );
+  });
+
+  test('the frame rate and HEVC shape the automatic bitrate', () {
+    const fast = VideoMetadata(
+      width: 1280,
+      height: 720,
+      rotationDegrees: 0,
+      duration: Duration(seconds: 10),
+      hasAudio: false,
+      isHdr: false,
+      bitrate: 50000000,
+      frameRate: 24,
+    );
+
+    expect(
+      VideoPlanning.videoBitrate(fast, VideoOptions.balanced),
+      (1280 * 720 * 24 * 0.07).round(),
+    );
+    expect(
+      VideoPlanning.videoBitrate(
+        fast,
+        VideoOptions.balanced.copyWith(codec: VideoCodec.hevc),
+      ),
+      (1280 * 720 * 24 * 0.07 * VideoPlanning.hevcShare).round(),
+    );
+  });
+
   test('estimate adds copied audio and follows the frame bounds', () {
     final estimate = VideoPlanning.estimate(_phone, VideoOptions.balanced);
     final video = (720 * 1280 * 30 * 0.07).round();

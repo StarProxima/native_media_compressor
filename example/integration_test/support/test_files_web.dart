@@ -5,6 +5,8 @@ import 'package:web/web.dart' as web;
 
 final _fixtures = <String, String>{};
 
+bool get isIosSimulator => false;
+
 Future<void> setUpFiles() async {}
 
 /// Loads the fixture from the asset bundle into a `blob:` URL.

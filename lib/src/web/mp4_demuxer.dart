@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'bytes.dart';
 import 'codec_config.dart';
+import 'media_plan.dart';
 
 /// Random access to the bytes of a media file.
 abstract interface class ByteSource {
@@ -68,6 +69,9 @@ final class Mp4Track {
 
   /// The complete `esds` box of an MPEG-4 audio track.
   Uint8List? esds;
+
+  /// The `dOps` or `dfLa` payload of an Opus or FLAC track.
+  Uint8List? audioConfig;
   int channelCount = 0;
   int sampleSize = 16;
   int sampleRate = 0;
@@ -135,6 +139,18 @@ final class Mp4Track {
 
   /// Track duration in milliseconds.
   int get durationMs => timescale == 0 ? 0 : duration * 1000 ~/ timescale;
+
+  /// Average frames per second, from the sample count and the sample
+  /// durations: the media duration also counts the delay that B-frames add
+  /// before the first frame.
+  double? get frameRate {
+    final total = samples.fold(0, (sum, sample) => sum + sample.duration);
+    return MediaPlan.frameRate(
+      samples.length,
+      total > 0 ? total : duration,
+      timescale,
+    );
+  }
 }
 
 /// The movie box of an MP4 or QuickTime file.
@@ -521,6 +537,8 @@ abstract final class Mp4Demuxer {
           Uint8List.sublistView(child.bytes, child.offset - 8, child.end),
         );
         track.audioObjectType = _objectType(child);
+      } else if (type == 'dOps' || type == 'dfLa') {
+        track.audioConfig = Uint8List.fromList(child.view(child.remaining));
       } else if (type == 'wave') {
         _audioChildren(track, child);
       }

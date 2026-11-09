@@ -65,8 +65,8 @@ enum ImageFormat {
 ///
 /// The video bitrate comes from the first of [targetBytes], [videoBitrate]
 /// and [qualityPercent] that is set, and otherwise from [bitsPerPixel]. It
-/// stays below the bitrate of the source video, so the output does not grow
-/// past the source.
+/// stays below the bitrate of the source video. Encoders may still overshoot
+/// it on short clips; [minSavingsPercent] guarantees a smaller output.
 ///
 /// [light], [balanced] and [strong] are ready settings for the usual cases.
 final class VideoOptions {

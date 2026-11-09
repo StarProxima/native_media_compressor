@@ -10,8 +10,9 @@
 
 Compress images and videos in Flutter with the codecs the platform already ships. No ffmpeg, no bundled encoders: the package adds only its own code to your app, and the encoding runs on the system's codecs, hardware-accelerated where the device has them.
 
-- **Presets instead of knobs:** pick `light`, `balanced` or `strong`, and the bitrate follows the frame size and stays below the source's, so the output never grows past the original.
-- **Video** to H.264 in MP4: scale down, cap the frame rate, aim at a target size, stop early at a size limit, report progress, cancel.
+- **Presets instead of knobs:** pick `light`, `balanced` or `strong`, and the bitrate follows the frame size and stays below the source's. Add `minSavingsPercent` and an output that is not smaller enough is dropped in favour of the original.
+- **Video** to H.264 or HEVC in MP4: scale down, cap the frame rate, trim, rotate, aim at a target size, stop early at a size limit, report progress, cancel. AAC audio is copied, any other audio is re-encoded to AAC.
+- **Thumbnails:** save any frame of a video as JPEG or PNG.
 - **Images** to JPEG or PNG: scale down, apply EXIF orientation, strip metadata. HEIC, WebP and animated inputs are read where the platform can decode them.
 - **Probe** size, rotation, duration, codecs, HDR and frame count from the headers, without decoding, to decide whether compression is worth it.
 - **Results instead of exceptions.** Every call ends with a status, and a failed call never touches the destination file. An output that saves too little can be dropped in favour of the original.
@@ -31,7 +32,7 @@ This package calls the system codecs directly, so your app grows only by the pac
 
 Measured with Flutter 3.47.8 as the difference between an empty app and the same app calling every method of the package. Windows and Linux are not measured yet.
 
-The trade-off: the output is always H.264, JPEG or PNG, and which inputs decode depends on the device and the system version, see [Supported formats](#supported-formats).
+The trade-off: the output is H.264 or HEVC, JPEG or PNG, and which inputs decode depends on the device and the system version, see [Supported formats](#supported-formats).
 
 ## Platform support
 
@@ -47,19 +48,31 @@ What each platform needs and where it says `unsupported` is listed under [Platfo
 
 ## Supported formats
 
-Output is always the same: video becomes H.264 in MP4 with AAC audio, images become JPEG or PNG. What can be read depends on the decoders the system has. The tables below are what CI checks on every platform with one sample file per container, codec and image format: an Android 14 emulator, the current iOS simulator and macOS, Windows Server 2025 without Store extensions, Ubuntu with the GStreamer packages from [Platform notes](#platform-notes), and Chrome. A format the platform cannot read returns `unsupported`, never `failed`.
+Video becomes H.264, or HEVC where the platform has an encoder and you ask for it, in MP4 with AAC audio; images become JPEG or PNG. What can be read depends on the decoders the system has. The tables below are what CI checks on every platform with one sample file per container, codec and image format: an Android 15 emulator, the current iOS simulator and macOS, Windows Server 2025 without Store extensions, Ubuntu with the GStreamer packages from [Platform notes](#platform-notes), and Chrome. A format the platform cannot read returns `unsupported`, never `failed`.
 
 ### Video input
 
 | Platform | Containers | Video codecs | Audio |
 |---|---|---|---|
-| Android | MP4, MOV, M4V, 3GP, MKV, WebM | H.264, HEVC, VP8, VP9, AV1, as far as the device has decoders; AV1 is on most Android 10+ devices | AAC is copied |
-| iOS, macOS | MP4, MOV, M4V, 3GP; not MKV or WebM | H.264, HEVC; AV1 only with a hardware decoder (A17 Pro, M3 and newer); not VP8 or VP9 | AAC is copied |
+| Android | MP4, MOV, M4V, 3GP, MKV, WebM | H.264, HEVC, VP8, VP9, AV1, as far as the device has decoders; AV1 is on most Android 10+ devices | AAC copied, other codecs re-encoded to AAC |
+| iOS, macOS | MP4, MOV, M4V, 3GP; not MKV or WebM | H.264, HEVC; AV1 only with a hardware decoder (A17 Pro, M3 and newer); not VP8 or VP9 | AAC copied, other codecs re-encoded to AAC |
 | Windows | MP4, MOV, M4V, 3GP, MKV | H.264 built in; HEVC, VP8, VP9 and AV1 with the matching Microsoft Store extensions | Re-encoded to AAC, one audio track |
-| Linux | Whatever the installed GStreamer plugins open; with the packages from Platform notes MP4, MOV, M4V, 3GP, MKV, WebM | Whatever the installed decoders handle; with those packages H.264, HEVC, VP8, VP9, AV1 | AAC is copied |
-| Web | MP4, MOV, M4V, 3GP, not fragmented; not MKV or WebM | Whatever the browser's WebCodecs decodes: H.264 everywhere; VP9 and AV1 in current Chrome, Edge and Firefox; HEVC where the device decodes it in hardware | AAC is copied |
+| Linux | Whatever the installed GStreamer plugins open; with the packages from Platform notes MP4, MOV, M4V, 3GP, MKV, WebM | Whatever the installed decoders handle; with those packages H.264, HEVC, VP8, VP9, AV1 | AAC copied, other codecs re-encoded to AAC |
+| Web | MP4, MOV, M4V, 3GP, not fragmented; not MKV or WebM | Whatever the browser's WebCodecs decodes: H.264 everywhere; VP9 and AV1 in current Chrome, Edge and Firefox; HEVC where the device decodes it in hardware | AAC copied; other codecs re-encoded where the browser has an AAC encoder |
 
-Where audio is copied, any other audio codec makes the call `unsupported` unless `includeAudio` is `false`.
+Audio that has to be re-encoded becomes AAC at `VideoOptions.audioBitrate`. Only where the platform has no AAC encoder, as in some browsers, is such a file `unsupported`; `includeAudio: false` then drops the audio instead.
+
+### Video output
+
+| Platform | H.264 | HEVC with `VideoCodec.hevc` |
+|---|---|---|
+| Android | always | where the device has an HEVC encoder, almost every phone since 2016 |
+| iOS, macOS | always | where the device has an HEVC encoder (A10, 6th-generation Intel and newer) |
+| Windows | always | with the HEVC Video Extensions from the Microsoft Store |
+| Linux | `x264enc`, `openh264enc` or `vah264enc` | with `x265enc` or `vah265enc` |
+| Web | always | where WebCodecs encodes HEVC, mostly Safari and Chrome with hardware support |
+
+Where HEVC is not available the output is H.264; `CompressionResult.videoCodec` says which one was written.
 
 ### Image input
 
@@ -131,7 +144,7 @@ final jpeg = result.bytes;
 | `balanced`, the default | up to 720p, 30 fps, 0.07 bits per pixel | long side up to 2048, JPEG 85 |
 | `strong` | up to 480p, 30 fps, 0.05 bits per pixel | long side up to 1280, JPEG 75 |
 
-The video bitrate is the frame size times the frame rate times the bits per pixel, so a 720p output gets about 1.9 Mbit/s and a 480p one about 0.6 Mbit/s. It never goes above 85% of the source's own video bitrate: re-encoding at the source bitrate would lose quality without saving space. Any field can be changed on top of a preset:
+The video bitrate is the frame size times the frame rate times the bits per pixel, so a 720p output gets about 1.9 Mbit/s and a 480p one about 0.6 Mbit/s. It never goes above 85% of the source's own video bitrate: re-encoding at the source bitrate would lose quality without saving space. Encoders do not always keep to the bitrate, especially on very short clips, so a re-encode can still come out larger than the source; `minSavingsPercent: 0` guarantees it never does. Any field can be changed on top of a preset:
 
 ```dart
 final options = VideoOptions.strong.copyWith(maxBytes: 25 * 1024 * 1024);
@@ -149,7 +162,7 @@ NativeMediaCompressor.compressVideo(
 );
 ```
 
-Encoders land within a few percent of the target; add `maxBytes` when the size is a hard limit, such as an upload cap. For images, `ImageOptions.targetBytes` lowers JPEG quality and then the image size until the output fits, in at most eight encodes.
+Encoders do not always keep to the requested bitrate, so when the output misses the target by more than 8% the video is encoded once more at a corrected bitrate, and the closer of the two results is kept. Add `maxBytes` when the size is a hard limit, such as an upload cap. For images, `ImageOptions.targetBytes` lowers JPEG quality and then the image size until the output fits, in at most eight encodes.
 
 ### Keep the original when compression does not pay off
 
@@ -158,6 +171,32 @@ const options = VideoOptions(minSavingsPercent: 20);
 ```
 
 An output that is not at least 20% smaller than the source is dropped and the call returns `CompressionStatus.skipped`; `destination` stays as it was. `0` drops only outputs that are not smaller at all.
+
+### Trim, rotate and pick the codec
+
+```dart
+const options = VideoOptions(
+  trimStart: Duration(seconds: 5),
+  trimEnd: Duration(seconds: 35),
+  rotateQuarterTurns: 1, // a quarter turn clockwise
+  codec: VideoCodec.hevc, // about a third smaller; falls back to H.264
+);
+```
+
+The bitrate, the estimate and a target size all take the trimmed length into account. HEVC gets about 70% of the H.264 bitrate for the same quality.
+
+### Save a frame
+
+```dart
+final thumbnail = await NativeMediaCompressor.videoThumbnail(
+  source: '/path/to/input.mov',
+  destination: '/path/to/frame.jpg',
+  position: const Duration(seconds: 3),
+  options: const ImageOptions(maxLongSide: 512),
+);
+```
+
+The frame keeps the displayed orientation; a position past the end gives the last frame.
 
 ### Estimate before compressing
 
@@ -210,7 +249,11 @@ await NativeMediaCompressor.compressImage(source: path, destination: path);
 | `maxFrameRate` | `30` | Frames above this rate are dropped. Capped at 240. |
 | `maxBytes` | `null` | Stop with `tooLarge` as soon as the output exceeds this size. |
 | `minSavingsPercent` | `null` | Drop an output that is not this much smaller than the source, with `skipped`. |
-| `includeAudio` | `true` | Keep the audio tracks. Non-AAC audio is `unsupported` unless this is `false`. |
+| `includeAudio` | `true` | Keep the audio tracks. |
+| `audioBitrate` | `128000` | Bitrate for audio re-encoded to AAC; AAC audio is copied as is. |
+| `codec` | `VideoCodec.h264` | `h264`, or `hevc` with a fallback to H.264. |
+| `trimStart`, `trimEnd` | `null` | Keep only this part of the video. |
+| `rotateQuarterTurns` | `0` | Clockwise quarter turns on top of the displayed orientation. |
 
 The frame is scaled down to fit both bounds, keeping its aspect ratio, and never scaled up. The bitrate comes from the first of `targetBytes`, `videoBitrate` and `qualityPercent` that is set, then from `bitsPerPixel`, and stays below 85% of the source video bitrate.
 
@@ -232,7 +275,7 @@ Compression never throws on bad input or a missing codec. Check `CompressionResu
 | Status | Meaning |
 |---|---|
 | `compressed` | The output is at `destination`. |
-| `unsupported` | The platform cannot do it: no codec, non-AAC audio while `includeAudio` is true, a format it cannot encode. Use the original file. |
+| `unsupported` | The platform cannot do it: no decoder for the input, no AAC encoder for audio that needs one, a container it cannot read. Use the original file. |
 | `tooLarge` | The output passed `VideoOptions.maxBytes`; compression stopped early. |
 | `cancelled` | `CompressionTask.cancel()` was called. |
 | `interrupted` | The system stopped the work, for example in the background. Retrying usually works. |
@@ -243,7 +286,7 @@ Every status except `compressed` leaves `destination` as it was.
 
 ## What the output looks like
 
-- **Video:** SDR H.264 in MP4, scaled down to fit `maxShortSide` and `maxLongSide`. The displayed orientation is kept. AAC audio is copied without re-encoding; on Windows it is re-encoded to AAC. Frames above `maxFrameRate` are dropped.
+- **Video:** SDR H.264 or HEVC in MP4, scaled down to fit `maxShortSide` and `maxLongSide`. The displayed orientation is kept, plus `rotateQuarterTurns`. AAC audio is copied without re-encoding, other audio is re-encoded to AAC; on Windows all audio is re-encoded to AAC. Frames above `maxFrameRate` are dropped.
 - **HDR video** (HLG, PQ, Dolby Vision, as phone cameras record by default) is tone-mapped to SDR on Android 7+ when the device decodes the source profile, on iOS 14+, macOS 11+ and in the browser. On Windows and Linux it is `unsupported` for now.
 - **Images:** JPEG or PNG, scaled down to fit both bounds, with EXIF orientation applied to the pixels and no metadata copied. Animated images keep the first frame. JPEG output of an image with transparency is flattened onto white.
 
@@ -258,7 +301,7 @@ Every status except `compressed` leaves `destination` as it was.
 **Linux.** GStreamer is loaded at runtime, so the app starts and images work without it. Video needs:
 
 - the development headers at build time: `libgstreamer1.0-dev` and `libgstreamer-plugins-base1.0-dev` on Debian and Ubuntu. Without them the plugin still builds, and video calls return `unsupported`;
-- at run time, a decoder for the input and an H.264 encoder (`x264enc`, `openh264enc` or `vah264enc`), for example from `gstreamer1.0-plugins-good`, `-bad`, `-ugly` and `gstreamer1.0-libav`.
+- at run time, a decoder for the input, an H.264 encoder (`x264enc`, `openh264enc` or `vah264enc`), for HEVC `x265enc` or `vah265enc`, and for re-encoded audio an AAC encoder (`avenc_aac`, `voaacenc` or `fdkaacenc`), for example from `gstreamer1.0-plugins-good`, `-bad`, `-ugly` and `gstreamer1.0-libav`.
 
 HEIC and WebP images need the matching gdk-pixbuf loaders, such as `heif-gdk-pixbuf` and `webp-pixbuf-loader`.
 

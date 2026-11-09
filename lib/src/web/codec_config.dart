@@ -256,3 +256,89 @@ abstract final class HevcSps {
     return negative + positive;
   }
 }
+
+/// Configuration records for re-encoding audio to AAC.
+abstract final class AudioConfig {
+  /// WebCodecs codec string and decoder description for audio with the MIME
+  /// type [mimeType] and the `dOps` or `dfLa` payload [config], or null when
+  /// there is no decoder to ask for.
+  static (String, Uint8List?)? decoder(String? mimeType, Uint8List? config) {
+    try {
+      return switch (mimeType) {
+        'audio/mpeg' => ('mp3', null),
+        'audio/ac3' => ('ac-3', null),
+        'audio/eac3' => ('ec-3', null),
+        'audio/opus' when config != null => ('opus', opusHead(config)),
+        'audio/flac' when config != null && config.length > 4 => (
+          'flac',
+          Uint8List.fromList([...'fLaC'.codeUnits, ...config.skip(4)]),
+        ),
+        _ => null,
+      };
+    } on MalformedMediaException {
+      return null;
+    }
+  }
+
+  /// The Ogg `OpusHead` header WebCodecs takes as the Opus description, from
+  /// the big-endian `dOps` payload of MP4.
+  static Uint8List opusHead(Uint8List dOps) {
+    final reader = ByteReader(dOps, 1);
+    final channels = reader.u8();
+    final preSkip = reader.u16();
+    final sampleRate = reader.u32();
+    final gain = reader.u16();
+    final family = reader.u8();
+    final head =
+        ByteData(19)
+          ..setUint8(8, 1)
+          ..setUint8(9, channels)
+          ..setUint16(10, preSkip, Endian.little)
+          ..setUint32(12, sampleRate, Endian.little)
+          ..setUint16(16, gain, Endian.little)
+          ..setUint8(18, family);
+    final bytes = head.buffer.asUint8List()..setAll(0, 'OpusHead'.codeUnits);
+    if (family == 0) return bytes;
+    return Uint8List.fromList([...bytes, ...reader.view(2 + channels)]);
+  }
+
+  /// A complete `esds` box for AAC with the AudioSpecificConfig [asc] the
+  /// encoder reported.
+  static Uint8List esds(Uint8List asc, {required int bitrate}) {
+    final decoderConfig = _descriptor(0x04, [
+      0x40,
+      // Audio stream, upstream flag clear, reserved bit set.
+      0x15,
+      0, 0, 0,
+      ..._u32(bitrate),
+      ..._u32(bitrate),
+      ..._descriptor(0x05, asc),
+    ]);
+    final elementary = _descriptor(0x03, [
+      0,
+      0,
+      0,
+      ...decoderConfig,
+      ..._descriptor(0x06, const [0x02]),
+    ]);
+    final writer =
+        ByteWriter()..fullBox('esds', 0, 0, (w) => w.bytes(elementary));
+    return writer.takeBytes();
+  }
+
+  static List<int> _u32(int value) => [
+    (value >> 24) & 0xff,
+    (value >> 16) & 0xff,
+    (value >> 8) & 0xff,
+    value & 0xff,
+  ];
+
+  /// An MPEG-4 descriptor: tag, size in 7-bit groups, body.
+  static List<int> _descriptor(int tag, List<int> body) {
+    final size = <int>[body.length & 0x7f];
+    for (var rest = body.length >> 7; rest > 0; rest >>= 7) {
+      size.insert(0, 0x80 | (rest & 0x7f));
+    }
+    return [tag, ...size, ...body];
+  }
+}

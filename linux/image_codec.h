@@ -31,6 +31,20 @@ std::optional<ImageInfo> ProbeImageFile(const std::string& path);
 // call off the platform thread.
 Outcome CompressImageFile(const ImageJob& job);
 
+// Packed 8-bit RGB pixels, `stride` bytes per row.
+struct RgbFrame {
+  const uint8_t* pixels = nullptr;
+  int width = 0;
+  int height = 0;
+  int stride = 0;
+};
+
+// Scales `frame` down to fit `bounds` and writes it to `output` as JPEG or
+// PNG, the way CompressImageFile writes a decoded image. Does not stage the
+// output; the caller owns the temporary file.
+Outcome WriteRgbFrame(const RgbFrame& frame, const SizeBounds& bounds, NmcImageFormat format,
+                      int64_t quality, const std::string& output);
+
 }  // namespace native_media_compressor
 
 #endif  // NATIVE_MEDIA_COMPRESSOR_IMAGE_CODEC_H_

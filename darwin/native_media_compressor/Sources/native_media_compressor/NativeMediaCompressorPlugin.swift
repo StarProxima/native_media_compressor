@@ -90,6 +90,15 @@ public final class NativeMediaCompressorPlugin: NSObject, FlutterPlugin, MediaCo
       DispatchQueue.main.async { completion(.success(probe)) }
     }
   }
+
+  func videoThumbnail(
+    request: ThumbnailRequest, completion: @escaping (Result<CompressionReply, Error>) -> Void
+  ) {
+    imageQueue.addOperation {
+      let reply = VideoThumbnail.capture(request)
+      DispatchQueue.main.async { completion(.success(reply)) }
+    }
+  }
 }
 
 final class CancelFlag {
