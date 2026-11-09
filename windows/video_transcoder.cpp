@@ -7,8 +7,6 @@
 #include <mferror.h>
 #include <mfidl.h>
 #include <mfreadwrite.h>
-#include <mftransform.h>
-#include <strmif.h>
 #include <wrl/client.h>
 
 #include <algorithm>
@@ -16,6 +14,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <initializer_list>
 #include <vector>
 
 #include "image_codec.h"
@@ -330,38 +329,23 @@ bool HasHevcEncoder() {
   return count > 0;
 }
 
-// With only MF_MT_AVG_BITRATE the encoder's default rate control overshoots
-// the target badly on short clips, so the rates and the keyframe interval are
-// also set on the encoder itself. A value the encoder rejects keeps its
-// default rather than failing the job.
-void ConfigureRateControl(IMFSinkWriter* writer, DWORD stream, UINT32 bitrate,
-                          UINT32 gop_frames) {
-  ComPtr<IMFSinkWriterEx> writer_ex;
-  if (FAILED(writer->QueryInterface(IID_PPV_ARGS(&writer_ex)))) return;
-  ComPtr<ICodecAPI> codec_api;
-  for (DWORD index = 0; !codec_api; ++index) {
-    GUID category = GUID_NULL;
-    ComPtr<IMFTransform> transform;
-    if (FAILED(writer_ex->GetTransformForStream(stream, index, &category, &transform))) return;
-    if (category == kVideoEncoderCategory) transform.As(&codec_api);
-  }
-  auto set_value = [&](const GUID& api, UINT32 value) {
-    VARIANT variant = {};
-    variant.vt = VT_UI4;
-    variant.ulVal = value;
-    return codec_api->SetValue(&api, &variant);
-  };
-  if (FAILED(set_value(CODECAPI_AVEncCommonRateControlMode,
-                       static_cast<UINT32>(eAVEncCommonRateControlMode_PeakConstrainedVBR)))) {
-    set_value(CODECAPI_AVEncCommonRateControlMode,
-              static_cast<UINT32>(eAVEncCommonRateControlMode_CBR));
-  }
-  // The peak goes first: some encoders reject a mean above the current peak.
+// Encoder settings handed to IMFSinkWriter::SetInputMediaType. With only
+// MF_MT_AVG_BITRATE the encoder stays in unconstrained VBR, which overshoots
+// the target badly on short clips, and it ignores rate control changed after
+// its media types are set.
+HRESULT CreateEncodingParameters(eAVEncCommonRateControlMode mode, UINT32 bitrate,
+                                 UINT32 gop_frames, ComPtr<IMFAttributes>* parameters) {
+  ComPtr<IMFAttributes> created;
+  NMC_RETURN_HR_IF_FAILED(MFCreateAttributes(&created, 4));
+  NMC_RETURN_HR_IF_FAILED(
+      created->SetUINT32(CODECAPI_AVEncCommonRateControlMode, static_cast<UINT32>(mode)));
+  NMC_RETURN_HR_IF_FAILED(created->SetUINT32(CODECAPI_AVEncCommonMeanBitRate, bitrate));
   const uint64_t peak = static_cast<uint64_t>(bitrate) * 3 / 2;
-  set_value(CODECAPI_AVEncCommonMaxBitRate,
-            static_cast<UINT32>(std::min<uint64_t>(peak, 0xFFFFFFFFull)));
-  set_value(CODECAPI_AVEncCommonMeanBitRate, bitrate);
-  set_value(CODECAPI_AVEncMPVGOPSize, gop_frames);
+  NMC_RETURN_HR_IF_FAILED(created->SetUINT32(
+      CODECAPI_AVEncCommonMaxBitRate, static_cast<UINT32>(std::min<uint64_t>(peak, 0xFFFFFFFFull))));
+  NMC_RETURN_HR_IF_FAILED(created->SetUINT32(CODECAPI_AVEncMPVGOPSize, gop_frames));
+  *parameters = created;
+  return S_OK;
 }
 
 // A source that cannot seek is read from its start instead; the samples before
@@ -685,17 +669,27 @@ Outcome Run(const VideoJob& job, const std::wstring& output,
       NMC_RETURN_IF_FAILED(encoder_input->DeleteItem(MF_MT_VIDEO_ROTATION),
                            "Creating the encoder input type");
     }
-    if (const HRESULT result =
-            writer->SetInputMediaType(video_index, encoder_input.Get(), nullptr);
-        FAILED(result)) {
-      return Outcome::Of(Status::kUnsupported,
-                         DescribeHresult(hevc ? "Finding an HEVC encoder" : "Finding an H.264 encoder",
-                                         result));
-    }
     // A keyframe about every two seconds.
     const UINT32 gop_frames = std::max<UINT32>(
         1, static_cast<UINT32>(std::lround(2.0 * rate_numerator / rate_denominator)));
-    ConfigureRateControl(writer.Get(), video_index, bitrate, gop_frames);
+    // An encoder that rejects a rate control mode gets the next one, and in
+    // the end its defaults, so the settings never cost the encoder itself.
+    HRESULT input_result = E_FAIL;
+    for (const eAVEncCommonRateControlMode mode :
+         {eAVEncCommonRateControlMode_PeakConstrainedVBR, eAVEncCommonRateControlMode_CBR}) {
+      ComPtr<IMFAttributes> parameters;
+      if (FAILED(CreateEncodingParameters(mode, bitrate, gop_frames, &parameters))) continue;
+      input_result = writer->SetInputMediaType(video_index, encoder_input.Get(), parameters.Get());
+      if (SUCCEEDED(input_result)) break;
+    }
+    if (FAILED(input_result)) {
+      input_result = writer->SetInputMediaType(video_index, encoder_input.Get(), nullptr);
+    }
+    if (FAILED(input_result)) {
+      return Outcome::Of(Status::kUnsupported,
+                         DescribeHresult(hevc ? "Finding an HEVC encoder" : "Finding an H.264 encoder",
+                                         input_result));
+    }
     return Outcome::Compressed(out_width, out_height);
   };
 
