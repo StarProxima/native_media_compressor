@@ -9,6 +9,7 @@ import 'browser.dart';
 import 'media_plan.dart';
 import 'mp4_demuxer.dart';
 import 'trim_range.dart';
+import 'web_image.dart';
 import 'web_video.dart';
 
 /// Video frames as images on the web, decoded with WebCodecs.
@@ -131,7 +132,7 @@ abstract final class WebVideoThumbnail {
       options.maxShortSide,
       options.maxLongSide,
     );
-    final type = options.format == ImageFormat.png ? 'image/png' : 'image/jpeg';
+    final type = WebImage.mimeTypeOf(options.format);
     final web.Blob output;
     try {
       final canvas = web.OffscreenCanvas(width, height);
