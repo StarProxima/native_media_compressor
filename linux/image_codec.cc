@@ -127,6 +127,42 @@ Outcome Fail(NmcCompressionStatus status, std::string message) {
   return Outcome::Of(status, std::move(message));
 }
 
+// Takes ownership of `image`.
+Outcome Save(GdkPixbuf* image, NmcImageFormat format, int64_t quality, const std::string& output) {
+  const bool jpeg = format == NATIVE_MEDIA_COMPRESSOR_IMAGE_FORMAT_JPEG;
+  if (jpeg && gdk_pixbuf_get_has_alpha(image)) {
+    GdkPixbuf* flat = FlattenOnWhite(image);
+    g_object_unref(image);
+    image = flat;
+    if (image == nullptr) {
+      return Fail(NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_FAILED, "Out of memory");
+    }
+  }
+
+  GError* error = nullptr;
+  gboolean saved;
+  if (jpeg) {
+    g_autofree gchar* level =
+        g_strdup_printf("%d", static_cast<int>(std::clamp<int64_t>(quality, 0, 100)));
+    saved = gdk_pixbuf_save(image, output.c_str(), "jpeg", &error, "quality", level, nullptr);
+  } else {
+    saved = gdk_pixbuf_save(image, output.c_str(), "png", &error, nullptr);
+  }
+  Outcome outcome;
+  if (saved) {
+    outcome.status = NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_COMPRESSED;
+    outcome.width = gdk_pixbuf_get_width(image);
+    outcome.height = gdk_pixbuf_get_height(image);
+  } else {
+    outcome = Fail(IsUnknownType(error) ? NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_UNSUPPORTED
+                                        : NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_FAILED,
+                   error != nullptr ? error->message : "Writing failed");
+  }
+  g_clear_error(&error);
+  g_object_unref(image);
+  return outcome;
+}
+
 Outcome Encode(const ImageJob& job, const std::string& output) {
   gint width = 0;
   gint height = 0;
@@ -178,42 +214,41 @@ Outcome Encode(const ImageJob& job, const std::string& output) {
   if (oriented == nullptr) {
     return Fail(NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_FAILED, "Out of memory");
   }
-
-  const bool jpeg = job.format == NATIVE_MEDIA_COMPRESSOR_IMAGE_FORMAT_JPEG;
-  if (jpeg && gdk_pixbuf_get_has_alpha(oriented)) {
-    GdkPixbuf* flat = FlattenOnWhite(oriented);
-    g_object_unref(oriented);
-    oriented = flat;
-    if (oriented == nullptr) {
-      return Fail(NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_FAILED, "Out of memory");
-    }
-  }
-
-  gboolean saved;
-  if (jpeg) {
-    g_autofree gchar* quality =
-        g_strdup_printf("%d", static_cast<int>(std::clamp<int64_t>(job.quality, 0, 100)));
-    saved = gdk_pixbuf_save(oriented, output.c_str(), "jpeg", &error, "quality", quality,
-                            nullptr);
-  } else {
-    saved = gdk_pixbuf_save(oriented, output.c_str(), "png", &error, nullptr);
-  }
-  Outcome outcome;
-  if (saved) {
-    outcome.status = NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_COMPRESSED;
-    outcome.width = gdk_pixbuf_get_width(oriented);
-    outcome.height = gdk_pixbuf_get_height(oriented);
-  } else {
-    outcome = Fail(IsUnknownType(error) ? NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_UNSUPPORTED
-                                        : NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_FAILED,
-                   error != nullptr ? error->message : "Writing failed");
-  }
-  g_clear_error(&error);
-  g_object_unref(oriented);
-  return outcome;
+  return Save(oriented, job.format, job.quality, output);
 }
 
 }  // namespace
+
+Outcome WriteRgbFrame(const RgbFrame& frame, const SizeBounds& bounds, NmcImageFormat format,
+                      int64_t quality, const std::string& output) {
+  try {
+    if (frame.pixels == nullptr || frame.width <= 0 || frame.height <= 0 ||
+        frame.stride < frame.width * 3) {
+      return Fail(NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_FAILED, "No frame was decoded");
+    }
+    // gdk-pixbuf only reads the wrapped pixels; the copy or the scaled image
+    // owns its own memory before the caller's buffer goes away.
+    GdkPixbuf* wrapped = gdk_pixbuf_new_from_data(frame.pixels, GDK_COLORSPACE_RGB, FALSE, 8,
+                                                  frame.width, frame.height, frame.stride,
+                                                  nullptr, nullptr);
+    if (wrapped == nullptr) {
+      return Fail(NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_FAILED, "Out of memory");
+    }
+    const double scale = FitScale(frame.width, frame.height, bounds);
+    const int width = static_cast<int>(ScaledSide(frame.width, scale));
+    const int height = static_cast<int>(ScaledSide(frame.height, scale));
+    GdkPixbuf* image = width == frame.width && height == frame.height
+                           ? gdk_pixbuf_copy(wrapped)
+                           : gdk_pixbuf_scale_simple(wrapped, width, height, GDK_INTERP_BILINEAR);
+    g_object_unref(wrapped);
+    if (image == nullptr) {
+      return Fail(NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_FAILED, "Out of memory");
+    }
+    return Save(image, format, quality, output);
+  } catch (const std::exception& error) {
+    return Fail(NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_FAILED, error.what());
+  }
+}
 
 std::optional<ImageInfo> ProbeImageFile(const std::string& path) {
   try {

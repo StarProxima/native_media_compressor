@@ -540,5 +540,166 @@ TEST(TranscodeVideo, CancelledBeforeStartKeepsTheDestination) {
   RemoveDirectory(directory);
 }
 
+TEST(VideoEncoderCandidates, HevcFallsBackToH264) {
+  const std::vector<VideoEncoderChoice> hevc = VideoEncoderCandidates(true);
+  ASSERT_FALSE(hevc.empty());
+  EXPECT_STREQ(hevc.front().encoder, "x265enc");
+  EXPECT_STREQ(hevc.front().mime, "video/hevc");
+  EXPECT_TRUE(hevc.front().parser_required);
+  EXPECT_STREQ(hevc.front().output_caps, "video/x-h265,stream-format=hvc1,alignment=au");
+  EXPECT_STREQ(hevc.back().mime, "video/avc");
+
+  const std::vector<VideoEncoderChoice> h264 = VideoEncoderCandidates(false);
+  ASSERT_FALSE(h264.empty());
+  EXPECT_STREQ(h264.front().encoder, "x264enc");
+  for (const VideoEncoderChoice& choice : h264) {
+    EXPECT_STREQ(choice.mime, "video/avc");
+    EXPECT_FALSE(choice.parser_required);
+  }
+}
+
+TEST(AacEncoderCandidates, PrefersLibav) {
+  const std::vector<const char*> encoders = AacEncoderCandidates();
+  ASSERT_EQ(encoders.size(), 3u);
+  EXPECT_STREQ(encoders.front(), "avenc_aac");
+}
+
+TEST(CombineVideoOrientation, AddsClockwiseTurns) {
+  EXPECT_EQ(CombineVideoOrientation(kOrientationIdentity, 0), kOrientationIdentity);
+  EXPECT_EQ(CombineVideoOrientation(kOrientationIdentity, 1), kOrientation90R);
+  EXPECT_EQ(CombineVideoOrientation(kOrientationIdentity, 3), kOrientation90L);
+  EXPECT_EQ(CombineVideoOrientation(kOrientation90R, 1), kOrientation180);
+  EXPECT_EQ(CombineVideoOrientation(kOrientation90L, 1), kOrientationIdentity);
+  EXPECT_EQ(CombineVideoOrientation(kOrientation180, 2), kOrientationIdentity);
+  EXPECT_EQ(CombineVideoOrientation(kOrientation90R, 5), kOrientation180);
+  EXPECT_EQ(CombineVideoOrientation(kOrientation90R, -1), kOrientationIdentity);
+}
+
+TEST(CombineVideoOrientation, KeepsTheMirrorOfFlippedSources) {
+  EXPECT_EQ(CombineVideoOrientation(kOrientationHoriz, 0), kOrientationHoriz);
+  EXPECT_EQ(CombineVideoOrientation(kOrientationHoriz, 1), kOrientationUrLl);
+  EXPECT_EQ(CombineVideoOrientation(kOrientationHoriz, 2), kOrientationVert);
+  EXPECT_EQ(CombineVideoOrientation(kOrientationHoriz, 3), kOrientationUlLr);
+  EXPECT_EQ(CombineVideoOrientation(kOrientationUlLr, 1), kOrientationHoriz);
+  EXPECT_EQ(CombineVideoOrientation(kOrientationVert, 2), kOrientationHoriz);
+  EXPECT_EQ(CombineVideoOrientation(42, 1), kOrientation90R);
+}
+
+TEST(ResolveKeptRange, ClampsToTheSource) {
+  const std::optional<KeptRange> whole = ResolveKeptRange(std::nullopt, std::nullopt, 5000);
+  ASSERT_TRUE(whole.has_value());
+  EXPECT_EQ(whole->start_ms, 0);
+  EXPECT_EQ(whole->end_ms, 5000);
+  EXPECT_FALSE(whole->partial);
+
+  const std::optional<KeptRange> tail = ResolveKeptRange(1000, 30000, 2000);
+  ASSERT_TRUE(tail.has_value());
+  EXPECT_EQ(tail->start_ms, 1000);
+  EXPECT_EQ(tail->end_ms, 2000);
+  EXPECT_TRUE(tail->partial);
+
+  const std::optional<KeptRange> head = ResolveKeptRange(std::nullopt, 3000, 5000);
+  ASSERT_TRUE(head.has_value());
+  EXPECT_EQ(head->start_ms, 0);
+  EXPECT_EQ(head->end_ms, 3000);
+  EXPECT_TRUE(head->partial);
+
+  const std::optional<KeptRange> negative = ResolveKeptRange(-500, 5000, 5000);
+  ASSERT_TRUE(negative.has_value());
+  EXPECT_EQ(negative->start_ms, 0);
+  EXPECT_FALSE(negative->partial);
+}
+
+TEST(ResolveKeptRange, HandlesAnUnknownDuration) {
+  const std::optional<KeptRange> open = ResolveKeptRange(2000, std::nullopt, 0);
+  ASSERT_TRUE(open.has_value());
+  EXPECT_FALSE(open->end_ms.has_value());
+  EXPECT_TRUE(open->partial);
+
+  const std::optional<KeptRange> bounded = ResolveKeptRange(std::nullopt, 4000, 0);
+  ASSERT_TRUE(bounded.has_value());
+  EXPECT_EQ(bounded->end_ms, 4000);
+  EXPECT_TRUE(bounded->partial);
+}
+
+TEST(ResolveKeptRange, RejectsARangeThatKeepsNothing) {
+  EXPECT_FALSE(ResolveKeptRange(5000, std::nullopt, 5000).has_value());
+  EXPECT_FALSE(ResolveKeptRange(6000, 9000, 5000).has_value());
+  EXPECT_FALSE(ResolveKeptRange(3000, 3000, 5000).has_value());
+  EXPECT_FALSE(ResolveKeptRange(3000, 1000, 5000).has_value());
+  EXPECT_FALSE(ResolveKeptRange(std::nullopt, 0, 5000).has_value());
+}
+
+TEST(TrimSample, KeepsTheHalfOpenRange) {
+  const int64_t second = 1000000000;
+  EXPECT_EQ(TrimSample(-1, 0, -1), TrimStep::kDrop);
+  EXPECT_EQ(TrimSample(second, 2 * second, 5 * second), TrimStep::kDrop);
+  EXPECT_EQ(TrimSample(2 * second, 2 * second, 5 * second), TrimStep::kKeep);
+  EXPECT_EQ(TrimSample(5 * second - 1, 2 * second, 5 * second), TrimStep::kKeep);
+  EXPECT_EQ(TrimSample(5 * second, 2 * second, 5 * second), TrimStep::kEnd);
+  EXPECT_EQ(TrimSample(100 * second, 2 * second, -1), TrimStep::kKeep);
+}
+
+TEST(PickThumbnailFrame, KeepsTheLastFrameAtOrBeforeThePosition) {
+  EXPECT_EQ(PickThumbnailFrame(0, 1000, false), FramePick::kTake);
+  EXPECT_EQ(PickThumbnailFrame(1000, 1000, true), FramePick::kTake);
+  EXPECT_EQ(PickThumbnailFrame(1033, 1000, true), FramePick::kStop);
+  EXPECT_EQ(PickThumbnailFrame(1033, 1000, false), FramePick::kTakeAndStop);
+  EXPECT_EQ(PickThumbnailFrame(-1, 1000, true), FramePick::kTake);
+}
+
+TEST(ThumbnailSeekMs, StaysInsideTheSource) {
+  EXPECT_EQ(ThumbnailSeekMs(0, 5000), -1);
+  EXPECT_EQ(ThumbnailSeekMs(1000, 5000), 1000);
+  EXPECT_EQ(ThumbnailSeekMs(30000, 5000), 4999);
+  EXPECT_EQ(ThumbnailSeekMs(30000, 0), 30000);
+}
+
+TEST(RgbRowStride, PrefersFourBytePaddedRows) {
+  EXPECT_EQ(RgbRowStride(3, 2, 24), 12);
+  EXPECT_EQ(RgbRowStride(3, 2, 18), 9);
+  EXPECT_EQ(RgbRowStride(3, 2, 17), 0);
+  EXPECT_EQ(RgbRowStride(4, 2, 24), 12);
+  EXPECT_EQ(RgbRowStride(0, 2, 24), 0);
+}
+
+TEST(WriteRgbFrame, ScalesDownWithoutGrowing) {
+  const int width = 64;
+  const int height = 36;
+  const int stride = RgbRowStride(width, height, static_cast<size_t>(192 * height));
+  ASSERT_EQ(stride, 192);
+  std::vector<uint8_t> pixels(static_cast<size_t>(stride) * height, 0x80);
+  const std::string output = TempPath("frame-out.jpg");
+  const Outcome scaled = WriteRgbFrame(RgbFrame{pixels.data(), width, height, stride},
+                                       {std::nullopt, 32}, NATIVE_MEDIA_COMPRESSOR_IMAGE_FORMAT_JPEG,
+                                       80, output);
+  ASSERT_EQ(scaled.status, NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_COMPRESSED) << scaled.message;
+  EXPECT_EQ(scaled.width, 32);
+  EXPECT_EQ(scaled.height, 18);
+  EXPECT_EQ(ProbeImageFile(output)->mime_type, "image/jpeg");
+
+  const Outcome kept = WriteRgbFrame(RgbFrame{pixels.data(), width, height, stride},
+                                     {std::nullopt, 4000}, NATIVE_MEDIA_COMPRESSOR_IMAGE_FORMAT_PNG,
+                                     80, output);
+  ASSERT_EQ(kept.status, NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_COMPRESSED) << kept.message;
+  EXPECT_EQ(kept.width, width);
+  EXPECT_EQ(kept.height, height);
+  RemoveFile(output);
+}
+
+TEST(VideoThumbnail, NonVideoInputLeavesNoOutput) {
+  const std::string directory = MakeDirectory();
+  ThumbnailJob job;
+  job.source = directory + "/not-a-video.mp4";
+  job.destination = directory + "/frame.jpg";
+  WriteBytes(job.source, std::vector<uint8_t>(4096, 'x'));
+  const Outcome outcome = VideoThumbnail(job);
+  EXPECT_TRUE(outcome.status == NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_UNSUPPORTED ||
+              outcome.status == NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_FAILED)
+      << outcome.status << " " << outcome.message;
+  EXPECT_EQ(DirectoryEntries(directory), 1);
+  RemoveDirectory(directory);
+}
+
 }  // namespace test
 }  // namespace native_media_compressor
