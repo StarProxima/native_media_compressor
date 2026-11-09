@@ -1047,7 +1047,7 @@ Outcome RunThumbnail(const ThumbnailJob& job, const std::wstring& output) {
   const bool turned = pixel_rotation == 90 || pixel_rotation == 270;
   ImageJob image;
   image.bounds = job.bounds;
-  image.png = job.png;
+  image.format = job.format;
   image.quality = job.quality;
   return WriteFrameImage(pixels, turned ? frame_height : frame_width,
                          turned ? frame_width : frame_height, image, output);

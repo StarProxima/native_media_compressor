@@ -3,6 +3,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <cstring>
 #include <fstream>
 #include <iterator>
 #include <string>
@@ -93,6 +94,60 @@ std::string ReadText(const std::wstring& path) {
   return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
 }
 
+// An APP1 segment with a little-endian EXIF directory that names the camera
+// and sets the orientation.
+std::string ExifSegment(uint16_t orientation) {
+  std::string tiff("II*\0", 4);
+  const auto put16 = [&tiff](uint32_t value) {
+    tiff.push_back(static_cast<char>(value & 0xFF));
+    tiff.push_back(static_cast<char>((value >> 8) & 0xFF));
+  };
+  const auto put32 = [&put16](uint32_t value) {
+    put16(value & 0xFFFF);
+    put16(value >> 16);
+  };
+  const std::string make = "NMCTestCamera";
+  put32(8);
+  // Two entries sorted by tag; the camera name follows the directory.
+  put16(2);
+  put16(0x010F);
+  put16(2);
+  put32(static_cast<uint32_t>(make.size() + 1));
+  put32(8 + 2 + 2 * 12 + 4);
+  put16(0x0112);
+  put16(3);
+  put32(1);
+  put16(orientation);
+  put16(0);
+  put32(0);
+  tiff += make;
+  tiff.push_back('\0');
+  const std::string payload = std::string("Exif\0\0", 6) + tiff;
+  const size_t length = payload.size() + 2;
+  std::string segment("\xFF\xE1", 2);
+  segment.push_back(static_cast<char>((length >> 8) & 0xFF));
+  segment.push_back(static_cast<char>(length & 0xFF));
+  return segment + payload;
+}
+
+// A JPEG stored as `width` x `height` with the EXIF segment right after SOI.
+void WriteJpegWithExif(const TempDirectory& directory, const std::wstring& path, int width,
+                       int height, uint16_t orientation) {
+  const auto bitmap = directory.File(L"plain.bmp");
+  const auto plain = directory.File(L"plain.jpg");
+  WriteBmp(bitmap, width, height);
+  ImageJob job;
+  job.source = bitmap;
+  job.destination = plain;
+  const Outcome outcome = CompressImageFile(job);
+  ASSERT_EQ(outcome.status, Status::kCompressed) << outcome.message;
+  const std::string jpeg = ReadText(plain);
+  DeleteFileW(bitmap.c_str());
+  DeleteFileW(plain.c_str());
+  std::ofstream out(path, std::ios::binary);
+  out << jpeg.substr(0, 2) << ExifSegment(orientation) << jpeg.substr(2);
+}
+
 }  // namespace
 
 TEST(FitScale, UsesTheTighterBound) {
@@ -156,7 +211,7 @@ TEST(CompressImageFile, WritesPngWithoutScalingUp) {
   job.source = source;
   job.destination = destination;
   job.bounds.max_long_side = 4000;
-  job.png = true;
+  job.format = ImageOutputFormat::kPng;
   const Outcome outcome = CompressImageFile(job);
 
   ASSERT_EQ(outcome.status, Status::kCompressed) << outcome.message;
@@ -219,6 +274,170 @@ TEST(CompressImageFile, DirectoryDestinationIsUntouched) {
   EXPECT_EQ(outcome.status, Status::kFailed);
   EXPECT_TRUE(IsDirectory(folder));
   EXPECT_EQ(directory.Entries().size(), 2u);
+}
+
+TEST(CompressImageFile, KeepsMetadataWithANormalOrientation) {
+  TempDirectory directory;
+  const auto source = directory.File(L"rotated.jpg");
+  const auto destination = directory.File(L"kept.jpg");
+  WriteJpegWithExif(directory, source, 40, 20, 6);
+  const auto source_probe = ProbeImageFile(source);
+  ASSERT_TRUE(source_probe.has_value());
+  ASSERT_EQ(source_probe->width, 20);
+  ASSERT_EQ(source_probe->height, 40);
+
+  ImageJob job;
+  job.source = source;
+  job.destination = destination;
+  job.keep_metadata = true;
+  const Outcome outcome = CompressImageFile(job);
+
+  ASSERT_EQ(outcome.status, Status::kCompressed) << outcome.message;
+  EXPECT_EQ(outcome.width, 20);
+  EXPECT_EQ(outcome.height, 40);
+  EXPECT_NE(ReadText(destination).find("NMCTestCamera"), std::string::npos);
+  // The pixels are upright, so the kept tag must not turn them again.
+  const auto probe = ProbeImageFile(destination);
+  ASSERT_TRUE(probe.has_value());
+  EXPECT_EQ(probe->width, 20);
+  EXPECT_EQ(probe->height, 40);
+  EXPECT_EQ(directory.Entries().size(), 2u);
+}
+
+TEST(CompressImageFile, DropsMetadataByDefault) {
+  TempDirectory directory;
+  const auto source = directory.File(L"rotated.jpg");
+  const auto destination = directory.File(L"plain.jpg");
+  WriteJpegWithExif(directory, source, 40, 20, 6);
+
+  ImageJob job;
+  job.source = source;
+  job.destination = destination;
+  const Outcome outcome = CompressImageFile(job);
+
+  ASSERT_EQ(outcome.status, Status::kCompressed) << outcome.message;
+  EXPECT_EQ(ReadText(destination).find("NMCTestCamera"), std::string::npos);
+  const auto probe = ProbeImageFile(destination);
+  ASSERT_TRUE(probe.has_value());
+  EXPECT_EQ(probe->width, 20);
+  EXPECT_EQ(probe->height, 40);
+}
+
+TEST(CompressImageFile, KeepingMetadataOfAPlainImageWritesIt) {
+  TempDirectory directory;
+  const auto source = directory.File(L"source.bmp");
+  const auto destination = directory.File(L"out.jpg");
+  WriteBmp(source, 30, 20);
+
+  ImageJob job;
+  job.source = source;
+  job.destination = destination;
+  job.keep_metadata = true;
+  const Outcome outcome = CompressImageFile(job);
+
+  ASSERT_EQ(outcome.status, Status::kCompressed) << outcome.message;
+  const auto probe = ProbeImageFile(destination);
+  ASSERT_TRUE(probe.has_value());
+  EXPECT_EQ(probe->width, 30);
+  EXPECT_EQ(probe->height, 20);
+  EXPECT_EQ(probe->mime_type.value_or(""), "image/jpeg");
+}
+
+TEST(CompressImageFile, WritesWebpOrReportsItUnsupported) {
+  TempDirectory directory;
+  const auto source = directory.File(L"source.bmp");
+  const auto destination = directory.File(L"out.webp");
+  WriteBmp(source, 40, 20);
+
+  ImageJob job;
+  job.source = source;
+  job.destination = destination;
+  job.format = ImageOutputFormat::kWebp;
+  const Outcome outcome = CompressImageFile(job);
+
+  if (outcome.status == Status::kCompressed) {
+    const std::string bytes = ReadText(destination);
+    ASSERT_GE(bytes.size(), 12u);
+    EXPECT_EQ(bytes.substr(0, 4), "RIFF");
+    EXPECT_EQ(bytes.substr(8, 4), "WEBP");
+  } else {
+    EXPECT_EQ(outcome.status, Status::kUnsupported) << outcome.message;
+    EXPECT_FALSE(outcome.message.empty());
+    EXPECT_EQ(FileSize(destination), -1);
+    EXPECT_EQ(directory.Entries().size(), 1u);
+  }
+}
+
+TEST(CompressImageFile, WritesHeicOrReportsItUnsupported) {
+  TempDirectory directory;
+  const auto source = directory.File(L"source.bmp");
+  const auto destination = directory.File(L"out.heic");
+  WriteBmp(source, 40, 20);
+
+  ImageJob job;
+  job.source = source;
+  job.destination = destination;
+  job.format = ImageOutputFormat::kHeic;
+  const Outcome outcome = CompressImageFile(job);
+
+  if (outcome.status == Status::kCompressed) {
+    const std::string bytes = ReadText(destination);
+    ASSERT_GE(bytes.size(), 12u);
+    EXPECT_EQ(bytes.substr(4, 4), "ftyp");
+  } else {
+    EXPECT_EQ(outcome.status, Status::kUnsupported) << outcome.message;
+    EXPECT_FALSE(outcome.message.empty());
+    EXPECT_EQ(FileSize(destination), -1);
+    EXPECT_EQ(directory.Entries().size(), 1u);
+  }
+}
+
+TEST(OrientationValue, ReadsNumbersAndText) {
+  PROPVARIANT value;
+  PropVariantInit(&value);
+  value.vt = VT_UI2;
+  value.uiVal = 6;
+  EXPECT_EQ(OrientationValue(value).value_or(0), 6u);
+  value.vt = VT_UI4;
+  value.ulVal = 8;
+  EXPECT_EQ(OrientationValue(value).value_or(0), 8u);
+  value.vt = VT_UI1;
+  value.bVal = 1;
+  EXPECT_EQ(OrientationValue(value).value_or(0), 1u);
+  char text[] = "3";
+  value.vt = VT_LPSTR;
+  value.pszVal = text;
+  EXPECT_EQ(OrientationValue(value).value_or(0), 3u);
+  wchar_t wide[] = L"5";
+  value.vt = VT_LPWSTR;
+  value.pwszVal = wide;
+  EXPECT_EQ(OrientationValue(value).value_or(0), 5u);
+}
+
+TEST(OrientationValue, RejectsAnythingElse) {
+  PROPVARIANT value;
+  PropVariantInit(&value);
+  EXPECT_FALSE(OrientationValue(value).has_value());
+  value.vt = VT_UI2;
+  value.uiVal = 0;
+  EXPECT_FALSE(OrientationValue(value).has_value());
+  value.uiVal = 9;
+  EXPECT_FALSE(OrientationValue(value).has_value());
+  value.vt = VT_I2;
+  value.iVal = -6;
+  EXPECT_FALSE(OrientationValue(value).has_value());
+  char suffixed[] = "6a";
+  value.vt = VT_LPSTR;
+  value.pszVal = suffixed;
+  EXPECT_FALSE(OrientationValue(value).has_value());
+  char empty[] = "";
+  value.pszVal = empty;
+  EXPECT_FALSE(OrientationValue(value).has_value());
+  value.pszVal = nullptr;
+  EXPECT_FALSE(OrientationValue(value).has_value());
+  value.vt = VT_R4;
+  value.fltVal = 6.0f;
+  EXPECT_FALSE(OrientationValue(value).has_value());
 }
 
 TEST(ProbeImageFile, ReadsBmpHeader) {

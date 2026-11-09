@@ -16,6 +16,20 @@ std::optional<int64_t> Optional(const int64_t* value) {
   return value ? std::optional<int64_t>(*value) : std::nullopt;
 }
 
+ImageOutputFormat ToOutputFormat(ImageFormat format) {
+  switch (format) {
+    case ImageFormat::kPng:
+      return ImageOutputFormat::kPng;
+    case ImageFormat::kWebp:
+      return ImageOutputFormat::kWebp;
+    case ImageFormat::kHeic:
+      return ImageOutputFormat::kHeic;
+    case ImageFormat::kJpeg:
+      break;
+  }
+  return ImageOutputFormat::kJpeg;
+}
+
 CompressionStatus ToCompressionStatus(Status status) {
   switch (status) {
     case Status::kCompressed:
@@ -116,8 +130,9 @@ void NativeMediaCompressorPlugin::CompressImage(
   job.destination = ToWindowsPath(request.destination());
   job.bounds.max_short_side = Optional(request.max_short_side());
   job.bounds.max_long_side = Optional(request.max_long_side());
-  job.png = request.format() == ImageFormat::kPng;
+  job.format = ToOutputFormat(request.format());
   job.quality = static_cast<int>(std::clamp<int64_t>(request.quality(), 0, 100));
+  job.keep_metadata = request.keep_metadata();
   media_workers_.Submit([this, job, result] {
     const CompressionReply reply = ToReply(CompressImageFile(job));
     dispatcher_.Post([result, reply] { result(reply); });
@@ -179,12 +194,19 @@ void NativeMediaCompressorPlugin::VideoThumbnail(
   job.position_ms = request.position_ms();
   job.bounds.max_short_side = Optional(request.max_short_side());
   job.bounds.max_long_side = Optional(request.max_long_side());
-  job.png = request.format() == ImageFormat::kPng;
+  job.format = ToOutputFormat(request.format());
   job.quality = static_cast<int>(std::clamp<int64_t>(request.quality(), 0, 100));
   media_workers_.Submit([this, job, result] {
     const CompressionReply reply = ToReply(SaveVideoFrame(job));
     dispatcher_.Post([result, reply] { result(reply); });
   });
+}
+
+// Windows does not stop a backgrounded app's work, so videos need no
+// foreground service.
+std::optional<FlutterError> NativeMediaCompressorPlugin::SetForegroundNotification(
+    const ForegroundNotification* /*notification*/) {
+  return std::nullopt;
 }
 
 }  // namespace native_media_compressor
