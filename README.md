@@ -26,12 +26,31 @@ This package calls the system codecs directly, so your app grows only by the pac
 
 | Platform | Added to a release app |
 |---|---|
-| Android, arm64 APK | about 160 KB |
-| iOS, app bundle | about 520 KB |
-| macOS, app bundle | about 1 MB, one universal binary for Intel and Apple silicon |
-| Web, `main.dart.js` | about 75 KB, 23 KB gzipped |
+| Android, arm64 APK | about 180 KB |
+| iOS, app bundle | about 680 KB |
+| macOS, app bundle | about 1.3 MB, one universal binary for Intel and Apple silicon |
+| Web, `main.dart.js` | about 90 KB, 28 KB gzipped |
 
 Measured with Flutter 3.47.8 as the difference between an empty app and the same app calling every method of the package. Windows and Linux are not measured yet.
+
+### Compared with similar packages
+
+Two other packages also use the system codecs instead of ffmpeg. As of November 2026, from their READMEs and source code, and with their app size measured the same way as above:
+
+| | native_media_compressor | [flutter_compress](https://pub.dev/packages/flutter_compress) 2.0.1 | [light_compressor_v2](https://pub.dev/packages/light_compressor_v2) 1.11.0 |
+|---|---|---|---|
+| Platforms | Android, iOS, macOS, Windows, Linux, web | Android, iOS, web | Android, iOS, macOS |
+| Images | JPEG, PNG, WebP, HEIC | JPEG, PNG, WebP, HEIC | no |
+| HEVC output with H.264 fallback | yes | yes | yes |
+| Target size, trimming | yes | yes | yes |
+| Frame-rate cap | every platform | iOS only | yes |
+| HDR video to SDR | Android 7+, iOS 14+, macOS 11+, web | not documented | iOS, macOS, Android 13+ |
+| Android `content://` sources | yes | no, file paths | not documented |
+| Failures | a status, never an exception | exceptions | result classes |
+| Added to an arm64 APK | about 180 KB | about 530 KB | about 65 KB |
+| Added to an iOS app | about 680 KB | about 555 KB | about 430 KB |
+
+Pick light_compressor_v2 for video only on Android, iOS and macOS with the smallest Android footprint, flutter_compress if you need its batch and save-to-downloads helpers, and this package when you ship to desktop as well or want HDR phone videos to come out right everywhere.
 
 The trade-off: the output is H.264 or HEVC, and JPEG, PNG, WebP or HEIC as far as the platform encodes them, and which inputs decode depends on the device and the system version, see [Supported formats](#supported-formats).
 
