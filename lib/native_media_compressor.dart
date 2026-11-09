@@ -106,6 +106,32 @@ abstract final class NativeMediaCompressor {
     }
   }
 
+  /// Saves the frame at [position] of the video at [source] as an image at
+  /// [destination], scaled down to fit [options] like [compressImage].
+  ///
+  /// A [position] past the end gives the last frame. On the web the result
+  /// points to an object URL.
+  static Future<CompressionResult> videoThumbnail({
+    required String source,
+    required String destination,
+    Duration position = Duration.zero,
+    ImageOptions options = const ImageOptions(maxLongSide: 512),
+  }) async {
+    try {
+      return await _platform.videoThumbnail(
+        source: source,
+        destination: destination,
+        position: position,
+        options: options,
+      );
+    } on Object catch (error) {
+      return CompressionResult(
+        status: CompressionStatus.failed,
+        message: '$error',
+      );
+    }
+  }
+
   /// Reads the image size and frame count without decoding the pixels.
   ///
   /// Returns null when the platform cannot read the image.
@@ -222,6 +248,7 @@ abstract final class NativeMediaCompressor {
         height: result.height,
         sizeBytes: result.sizeBytes,
         message: result.message,
+        videoCodec: result.videoCodec,
       );
     } on Object catch (error) {
       await StagedFiles.discard(result.path);

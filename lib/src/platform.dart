@@ -46,6 +46,14 @@ abstract class NativeMediaCompressorPlatform extends PlatformInterface {
 
   /// See `NativeMediaCompressor.probeVideo`.
   Future<VideoMetadata?> probeVideo(String source);
+
+  /// See `NativeMediaCompressor.videoThumbnail`.
+  Future<CompressionResult> videoThumbnail({
+    required String source,
+    required String destination,
+    required Duration position,
+    required ImageOptions options,
+  });
 }
 
 /// Implementation over the host platform channel, used on every platform
@@ -88,6 +96,11 @@ class PigeonMediaCompressor extends NativeMediaCompressorPlatform
       maxFrameRate: options.maxFrameRate?.clamp(1, _maxFrameRate),
       maxBytes: options.maxBytes,
       includeAudio: options.includeAudio,
+      codec: pigeon.VideoCodec.values[options.codec.index],
+      startMs: options.trimStart?.inMilliseconds,
+      endMs: options.trimEnd?.inMilliseconds,
+      rotateQuarterTurns: options.rotateQuarterTurns,
+      audioBitrate: options.audioBitrate,
     );
     final result = _guard(
       () => _host.compressVideo(taskId, request),
@@ -167,12 +180,33 @@ class PigeonMediaCompressor extends NativeMediaCompressorPlatform
         hasAudio: probe.hasAudio,
         isHdr: probe.isHdr,
         audioCodec: probe.audioCodec,
+        frameRate: probe.frameRate,
       );
     } on PlatformException {
       return null;
     } on MissingPluginException {
       return null;
     }
+  }
+
+  @override
+  Future<CompressionResult> videoThumbnail({
+    required String source,
+    required String destination,
+    required Duration position,
+    required ImageOptions options,
+  }) {
+    final request = pigeon.ThumbnailRequest(
+      source: source,
+      destination: destination,
+      positionMs: position.inMilliseconds,
+      maxShortSide: options.maxShortSide,
+      maxLongSide: options.maxLongSide,
+      format: pigeon.ImageFormat.values[options.format.index],
+      quality: options.quality,
+    );
+
+    return _guard(() => _host.videoThumbnail(request), path: destination);
   }
 
   @override
@@ -209,6 +243,7 @@ class PigeonMediaCompressor extends NativeMediaCompressorPlatform
         height: reply.height,
         sizeBytes: reply.sizeBytes,
         message: reply.message,
+        videoCodec: reply.videoCodec,
       );
     } on PlatformException catch (error) {
       return CompressionResult(

@@ -221,6 +221,18 @@ enum class ImageFormat(val raw: Int) {
   }
 }
 
+/** Codec of the output video track. */
+enum class VideoCodec(val raw: Int) {
+  H264(0),
+  HEVC(1);
+
+  companion object {
+    fun ofRaw(raw: Int): VideoCodec? {
+      return values().firstOrNull { it.raw == raw }
+    }
+  }
+}
+
 /** Generated class from Pigeon that represents data sent in messages. */
 data class VideoRequest (
   val source: String,
@@ -230,7 +242,26 @@ data class VideoRequest (
   val videoBitrate: Long,
   val maxFrameRate: Long? = null,
   val maxBytes: Long? = null,
-  val includeAudio: Boolean
+  val includeAudio: Boolean,
+  /**
+   * Preferred output codec; HEVC falls back to H.264 where the platform has
+   * no HEVC encoder. The reply names the codec actually written.
+   */
+  val codec: VideoCodec,
+  /**
+   * Start of the kept range in the source timeline; null keeps from the
+   * start.
+   */
+  val startMs: Long? = null,
+  /** End of the kept range in the source timeline; null keeps to the end. */
+  val endMs: Long? = null,
+  /** Clockwise quarter turns on top of the displayed orientation, 0 to 3. */
+  val rotateQuarterTurns: Long,
+  /**
+   * Bitrate for audio that has to be re-encoded to AAC. AAC audio is copied
+   * as is.
+   */
+  val audioBitrate: Long
 )
  {
   companion object {
@@ -243,7 +274,12 @@ data class VideoRequest (
       val maxFrameRate = pigeonVar_list[5] as Long?
       val maxBytes = pigeonVar_list[6] as Long?
       val includeAudio = pigeonVar_list[7] as Boolean
-      return VideoRequest(source, destination, maxShortSide, maxLongSide, videoBitrate, maxFrameRate, maxBytes, includeAudio)
+      val codec = pigeonVar_list[8] as VideoCodec
+      val startMs = pigeonVar_list[9] as Long?
+      val endMs = pigeonVar_list[10] as Long?
+      val rotateQuarterTurns = pigeonVar_list[11] as Long
+      val audioBitrate = pigeonVar_list[12] as Long
+      return VideoRequest(source, destination, maxShortSide, maxLongSide, videoBitrate, maxFrameRate, maxBytes, includeAudio, codec, startMs, endMs, rotateQuarterTurns, audioBitrate)
     }
   }
   fun toList(): List<Any?> {
@@ -256,6 +292,11 @@ data class VideoRequest (
       maxFrameRate,
       maxBytes,
       includeAudio,
+      codec,
+      startMs,
+      endMs,
+      rotateQuarterTurns,
+      audioBitrate,
     )
   }
   override fun equals(other: Any?): Boolean {
@@ -266,7 +307,7 @@ data class VideoRequest (
       return true
     }
     val other = other as VideoRequest
-    return MessagesPigeonUtils.deepEquals(this.source, other.source) && MessagesPigeonUtils.deepEquals(this.destination, other.destination) && MessagesPigeonUtils.deepEquals(this.maxShortSide, other.maxShortSide) && MessagesPigeonUtils.deepEquals(this.maxLongSide, other.maxLongSide) && MessagesPigeonUtils.deepEquals(this.videoBitrate, other.videoBitrate) && MessagesPigeonUtils.deepEquals(this.maxFrameRate, other.maxFrameRate) && MessagesPigeonUtils.deepEquals(this.maxBytes, other.maxBytes) && MessagesPigeonUtils.deepEquals(this.includeAudio, other.includeAudio)
+    return MessagesPigeonUtils.deepEquals(this.source, other.source) && MessagesPigeonUtils.deepEquals(this.destination, other.destination) && MessagesPigeonUtils.deepEquals(this.maxShortSide, other.maxShortSide) && MessagesPigeonUtils.deepEquals(this.maxLongSide, other.maxLongSide) && MessagesPigeonUtils.deepEquals(this.videoBitrate, other.videoBitrate) && MessagesPigeonUtils.deepEquals(this.maxFrameRate, other.maxFrameRate) && MessagesPigeonUtils.deepEquals(this.maxBytes, other.maxBytes) && MessagesPigeonUtils.deepEquals(this.includeAudio, other.includeAudio) && MessagesPigeonUtils.deepEquals(this.codec, other.codec) && MessagesPigeonUtils.deepEquals(this.startMs, other.startMs) && MessagesPigeonUtils.deepEquals(this.endMs, other.endMs) && MessagesPigeonUtils.deepEquals(this.rotateQuarterTurns, other.rotateQuarterTurns) && MessagesPigeonUtils.deepEquals(this.audioBitrate, other.audioBitrate)
   }
 
   override fun hashCode(): Int {
@@ -279,6 +320,73 @@ data class VideoRequest (
     result = 31 * result + MessagesPigeonUtils.deepHash(this.maxFrameRate)
     result = 31 * result + MessagesPigeonUtils.deepHash(this.maxBytes)
     result = 31 * result + MessagesPigeonUtils.deepHash(this.includeAudio)
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.codec)
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.startMs)
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.endMs)
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.rotateQuarterTurns)
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.audioBitrate)
+    return result
+  }
+}
+
+/** Generated class from Pigeon that represents data sent in messages. */
+data class ThumbnailRequest (
+  val source: String,
+  val destination: String,
+  /**
+   * Frame position in the source timeline; past the end means the last
+   * frame.
+   */
+  val positionMs: Long,
+  val maxShortSide: Long? = null,
+  val maxLongSide: Long? = null,
+  val format: ImageFormat,
+  val quality: Long
+)
+ {
+  companion object {
+    fun fromList(pigeonVar_list: List<Any?>): ThumbnailRequest {
+      val source = pigeonVar_list[0] as String
+      val destination = pigeonVar_list[1] as String
+      val positionMs = pigeonVar_list[2] as Long
+      val maxShortSide = pigeonVar_list[3] as Long?
+      val maxLongSide = pigeonVar_list[4] as Long?
+      val format = pigeonVar_list[5] as ImageFormat
+      val quality = pigeonVar_list[6] as Long
+      return ThumbnailRequest(source, destination, positionMs, maxShortSide, maxLongSide, format, quality)
+    }
+  }
+  fun toList(): List<Any?> {
+    return listOf(
+      source,
+      destination,
+      positionMs,
+      maxShortSide,
+      maxLongSide,
+      format,
+      quality,
+    )
+  }
+  override fun equals(other: Any?): Boolean {
+    if (other == null || other.javaClass != javaClass) {
+      return false
+    }
+    if (this === other) {
+      return true
+    }
+    val other = other as ThumbnailRequest
+    return MessagesPigeonUtils.deepEquals(this.source, other.source) && MessagesPigeonUtils.deepEquals(this.destination, other.destination) && MessagesPigeonUtils.deepEquals(this.positionMs, other.positionMs) && MessagesPigeonUtils.deepEquals(this.maxShortSide, other.maxShortSide) && MessagesPigeonUtils.deepEquals(this.maxLongSide, other.maxLongSide) && MessagesPigeonUtils.deepEquals(this.format, other.format) && MessagesPigeonUtils.deepEquals(this.quality, other.quality)
+  }
+
+  override fun hashCode(): Int {
+    var result = javaClass.hashCode()
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.source)
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.destination)
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.positionMs)
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.maxShortSide)
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.maxLongSide)
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.format)
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.quality)
     return result
   }
 }
@@ -343,7 +451,9 @@ data class CompressionReply (
   val width: Long? = null,
   val height: Long? = null,
   val sizeBytes: Long? = null,
-  val message: String? = null
+  val message: String? = null,
+  /** Codec of the written video track, as a MIME type such as `video/avc`. */
+  val videoCodec: String? = null
 )
  {
   companion object {
@@ -353,7 +463,8 @@ data class CompressionReply (
       val height = pigeonVar_list[2] as Long?
       val sizeBytes = pigeonVar_list[3] as Long?
       val message = pigeonVar_list[4] as String?
-      return CompressionReply(status, width, height, sizeBytes, message)
+      val videoCodec = pigeonVar_list[5] as String?
+      return CompressionReply(status, width, height, sizeBytes, message, videoCodec)
     }
   }
   fun toList(): List<Any?> {
@@ -363,6 +474,7 @@ data class CompressionReply (
       height,
       sizeBytes,
       message,
+      videoCodec,
     )
   }
   override fun equals(other: Any?): Boolean {
@@ -373,7 +485,7 @@ data class CompressionReply (
       return true
     }
     val other = other as CompressionReply
-    return MessagesPigeonUtils.deepEquals(this.status, other.status) && MessagesPigeonUtils.deepEquals(this.width, other.width) && MessagesPigeonUtils.deepEquals(this.height, other.height) && MessagesPigeonUtils.deepEquals(this.sizeBytes, other.sizeBytes) && MessagesPigeonUtils.deepEquals(this.message, other.message)
+    return MessagesPigeonUtils.deepEquals(this.status, other.status) && MessagesPigeonUtils.deepEquals(this.width, other.width) && MessagesPigeonUtils.deepEquals(this.height, other.height) && MessagesPigeonUtils.deepEquals(this.sizeBytes, other.sizeBytes) && MessagesPigeonUtils.deepEquals(this.message, other.message) && MessagesPigeonUtils.deepEquals(this.videoCodec, other.videoCodec)
   }
 
   override fun hashCode(): Int {
@@ -383,6 +495,7 @@ data class CompressionReply (
     result = 31 * result + MessagesPigeonUtils.deepHash(this.height)
     result = 31 * result + MessagesPigeonUtils.deepHash(this.sizeBytes)
     result = 31 * result + MessagesPigeonUtils.deepHash(this.message)
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.videoCodec)
     return result
   }
 }
@@ -443,7 +556,12 @@ data class VideoProbe (
   val videoCodec: String? = null,
   val isHdr: Boolean,
   val hasAudio: Boolean,
-  val audioCodec: String? = null
+  val audioCodec: String? = null,
+  /**
+   * Average frames per second of the video track, when the container
+   * reports it.
+   */
+  val frameRate: Double? = null
 )
  {
   companion object {
@@ -457,7 +575,8 @@ data class VideoProbe (
       val isHdr = pigeonVar_list[6] as Boolean
       val hasAudio = pigeonVar_list[7] as Boolean
       val audioCodec = pigeonVar_list[8] as String?
-      return VideoProbe(width, height, rotationDegrees, durationMs, bitrate, videoCodec, isHdr, hasAudio, audioCodec)
+      val frameRate = pigeonVar_list[9] as Double?
+      return VideoProbe(width, height, rotationDegrees, durationMs, bitrate, videoCodec, isHdr, hasAudio, audioCodec, frameRate)
     }
   }
   fun toList(): List<Any?> {
@@ -471,6 +590,7 @@ data class VideoProbe (
       isHdr,
       hasAudio,
       audioCodec,
+      frameRate,
     )
   }
   override fun equals(other: Any?): Boolean {
@@ -481,7 +601,7 @@ data class VideoProbe (
       return true
     }
     val other = other as VideoProbe
-    return MessagesPigeonUtils.deepEquals(this.width, other.width) && MessagesPigeonUtils.deepEquals(this.height, other.height) && MessagesPigeonUtils.deepEquals(this.rotationDegrees, other.rotationDegrees) && MessagesPigeonUtils.deepEquals(this.durationMs, other.durationMs) && MessagesPigeonUtils.deepEquals(this.bitrate, other.bitrate) && MessagesPigeonUtils.deepEquals(this.videoCodec, other.videoCodec) && MessagesPigeonUtils.deepEquals(this.isHdr, other.isHdr) && MessagesPigeonUtils.deepEquals(this.hasAudio, other.hasAudio) && MessagesPigeonUtils.deepEquals(this.audioCodec, other.audioCodec)
+    return MessagesPigeonUtils.deepEquals(this.width, other.width) && MessagesPigeonUtils.deepEquals(this.height, other.height) && MessagesPigeonUtils.deepEquals(this.rotationDegrees, other.rotationDegrees) && MessagesPigeonUtils.deepEquals(this.durationMs, other.durationMs) && MessagesPigeonUtils.deepEquals(this.bitrate, other.bitrate) && MessagesPigeonUtils.deepEquals(this.videoCodec, other.videoCodec) && MessagesPigeonUtils.deepEquals(this.isHdr, other.isHdr) && MessagesPigeonUtils.deepEquals(this.hasAudio, other.hasAudio) && MessagesPigeonUtils.deepEquals(this.audioCodec, other.audioCodec) && MessagesPigeonUtils.deepEquals(this.frameRate, other.frameRate)
   }
 
   override fun hashCode(): Int {
@@ -495,6 +615,7 @@ data class VideoProbe (
     result = 31 * result + MessagesPigeonUtils.deepHash(this.isHdr)
     result = 31 * result + MessagesPigeonUtils.deepHash(this.hasAudio)
     result = 31 * result + MessagesPigeonUtils.deepHash(this.audioCodec)
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.frameRate)
     return result
   }
 }
@@ -512,26 +633,36 @@ private open class MessagesPigeonCodec : StandardMessageCodec() {
         }
       }
       131.toByte() -> {
-        return (readValue(buffer) as? List<Any?>)?.let {
-          VideoRequest.fromList(it)
+        return (readValue(buffer) as Long?)?.let {
+          VideoCodec.ofRaw(it.toInt())
         }
       }
       132.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          ImageRequest.fromList(it)
+          VideoRequest.fromList(it)
         }
       }
       133.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          CompressionReply.fromList(it)
+          ThumbnailRequest.fromList(it)
         }
       }
       134.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          ImageProbe.fromList(it)
+          ImageRequest.fromList(it)
         }
       }
       135.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
+          CompressionReply.fromList(it)
+        }
+      }
+      136.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
+          ImageProbe.fromList(it)
+        }
+      }
+      137.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
           VideoProbe.fromList(it)
         }
@@ -549,24 +680,32 @@ private open class MessagesPigeonCodec : StandardMessageCodec() {
         stream.write(130)
         writeValue(stream, value.raw.toLong())
       }
-      is VideoRequest -> {
+      is VideoCodec -> {
         stream.write(131)
-        writeValue(stream, value.toList())
+        writeValue(stream, value.raw.toLong())
       }
-      is ImageRequest -> {
+      is VideoRequest -> {
         stream.write(132)
         writeValue(stream, value.toList())
       }
-      is CompressionReply -> {
+      is ThumbnailRequest -> {
         stream.write(133)
         writeValue(stream, value.toList())
       }
-      is ImageProbe -> {
+      is ImageRequest -> {
         stream.write(134)
         writeValue(stream, value.toList())
       }
-      is VideoProbe -> {
+      is CompressionReply -> {
         stream.write(135)
+        writeValue(stream, value.toList())
+      }
+      is ImageProbe -> {
+        stream.write(136)
+        writeValue(stream, value.toList())
+      }
+      is VideoProbe -> {
+        stream.write(137)
         writeValue(stream, value.toList())
       }
       else -> super.writeValue(stream, value)
@@ -582,6 +721,7 @@ interface MediaCompressorHostApi {
   fun cancel(taskId: Long)
   fun probeImage(source: String, callback: (Result<ImageProbe?>) -> Unit)
   fun probeVideo(source: String, callback: (Result<VideoProbe?>) -> Unit)
+  fun videoThumbnail(request: ThumbnailRequest, callback: (Result<CompressionReply>) -> Unit)
 
   companion object {
     /** The codec used by MediaCompressorHostApi. */
@@ -678,6 +818,26 @@ interface MediaCompressorHostApi {
             val args = message as List<Any?>
             val sourceArg = args[0] as String
             api.probeVideo(sourceArg) { result: Result<VideoProbe?> ->
+              val error = result.exceptionOrNull()
+              if (error != null) {
+                reply.reply(MessagesPigeonUtils.wrapError(error))
+              } else {
+                val data = result.getOrNull()
+                reply.reply(MessagesPigeonUtils.wrapResult(data))
+              }
+            }
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_media_compressor.MediaCompressorHostApi.videoThumbnail$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { message, reply ->
+            val args = message as List<Any?>
+            val requestArg = args[0] as ThumbnailRequest
+            api.videoThumbnail(requestArg) { result: Result<CompressionReply> ->
               val error = result.exceptionOrNull()
               if (error != null) {
                 reply.reply(MessagesPigeonUtils.wrapError(error))

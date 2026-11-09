@@ -231,11 +231,17 @@ VideoRequest::VideoRequest(
   const std::string& source,
   const std::string& destination,
   int64_t video_bitrate,
-  bool include_audio)
+  bool include_audio,
+  const VideoCodec& codec,
+  int64_t rotate_quarter_turns,
+  int64_t audio_bitrate)
  : source_(source),
     destination_(destination),
     video_bitrate_(video_bitrate),
-    include_audio_(include_audio) {}
+    include_audio_(include_audio),
+    codec_(codec),
+    rotate_quarter_turns_(rotate_quarter_turns),
+    audio_bitrate_(audio_bitrate) {}
 
 VideoRequest::VideoRequest(
   const std::string& source,
@@ -245,7 +251,12 @@ VideoRequest::VideoRequest(
   int64_t video_bitrate,
   const int64_t* max_frame_rate,
   const int64_t* max_bytes,
-  bool include_audio)
+  bool include_audio,
+  const VideoCodec& codec,
+  const int64_t* start_ms,
+  const int64_t* end_ms,
+  int64_t rotate_quarter_turns,
+  int64_t audio_bitrate)
  : source_(source),
     destination_(destination),
     max_short_side_(max_short_side ? std::optional<int64_t>(*max_short_side) : std::nullopt),
@@ -253,7 +264,12 @@ VideoRequest::VideoRequest(
     video_bitrate_(video_bitrate),
     max_frame_rate_(max_frame_rate ? std::optional<int64_t>(*max_frame_rate) : std::nullopt),
     max_bytes_(max_bytes ? std::optional<int64_t>(*max_bytes) : std::nullopt),
-    include_audio_(include_audio) {}
+    include_audio_(include_audio),
+    codec_(codec),
+    start_ms_(start_ms ? std::optional<int64_t>(*start_ms) : std::nullopt),
+    end_ms_(end_ms ? std::optional<int64_t>(*end_ms) : std::nullopt),
+    rotate_quarter_turns_(rotate_quarter_turns),
+    audio_bitrate_(audio_bitrate) {}
 
 const std::string& VideoRequest::source() const {
   return source_;
@@ -343,9 +359,62 @@ void VideoRequest::set_include_audio(bool value_arg) {
 }
 
 
+const VideoCodec& VideoRequest::codec() const {
+  return codec_;
+}
+
+void VideoRequest::set_codec(const VideoCodec& value_arg) {
+  codec_ = value_arg;
+}
+
+
+const int64_t* VideoRequest::start_ms() const {
+  return start_ms_ ? &(*start_ms_) : nullptr;
+}
+
+void VideoRequest::set_start_ms(const int64_t* value_arg) {
+  start_ms_ = value_arg ? std::optional<int64_t>(*value_arg) : std::nullopt;
+}
+
+void VideoRequest::set_start_ms(int64_t value_arg) {
+  start_ms_ = value_arg;
+}
+
+
+const int64_t* VideoRequest::end_ms() const {
+  return end_ms_ ? &(*end_ms_) : nullptr;
+}
+
+void VideoRequest::set_end_ms(const int64_t* value_arg) {
+  end_ms_ = value_arg ? std::optional<int64_t>(*value_arg) : std::nullopt;
+}
+
+void VideoRequest::set_end_ms(int64_t value_arg) {
+  end_ms_ = value_arg;
+}
+
+
+int64_t VideoRequest::rotate_quarter_turns() const {
+  return rotate_quarter_turns_;
+}
+
+void VideoRequest::set_rotate_quarter_turns(int64_t value_arg) {
+  rotate_quarter_turns_ = value_arg;
+}
+
+
+int64_t VideoRequest::audio_bitrate() const {
+  return audio_bitrate_;
+}
+
+void VideoRequest::set_audio_bitrate(int64_t value_arg) {
+  audio_bitrate_ = value_arg;
+}
+
+
 EncodableList VideoRequest::ToEncodableList() const {
   EncodableList list;
-  list.reserve(8);
+  list.reserve(13);
   list.push_back(EncodableValue(source_));
   list.push_back(EncodableValue(destination_));
   list.push_back(max_short_side_ ? EncodableValue(*max_short_side_) : EncodableValue());
@@ -354,6 +423,11 @@ EncodableList VideoRequest::ToEncodableList() const {
   list.push_back(max_frame_rate_ ? EncodableValue(*max_frame_rate_) : EncodableValue());
   list.push_back(max_bytes_ ? EncodableValue(*max_bytes_) : EncodableValue());
   list.push_back(EncodableValue(include_audio_));
+  list.push_back(CustomEncodableValue(codec_));
+  list.push_back(start_ms_ ? EncodableValue(*start_ms_) : EncodableValue());
+  list.push_back(end_ms_ ? EncodableValue(*end_ms_) : EncodableValue());
+  list.push_back(EncodableValue(rotate_quarter_turns_));
+  list.push_back(EncodableValue(audio_bitrate_));
   return list;
 }
 
@@ -362,7 +436,10 @@ VideoRequest VideoRequest::FromEncodableList(const EncodableList& list) {
     std::get<std::string>(list[0]),
     std::get<std::string>(list[1]),
     std::get<int64_t>(list[4]),
-    std::get<bool>(list[7]));
+    std::get<bool>(list[7]),
+    std::any_cast<const VideoCodec&>(std::get<CustomEncodableValue>(list[8])),
+    std::get<int64_t>(list[11]),
+    std::get<int64_t>(list[12]));
   auto& encodable_max_short_side = list[2];
   if (!encodable_max_short_side.IsNull()) {
     decoded.set_max_short_side(std::get<int64_t>(encodable_max_short_side));
@@ -379,11 +456,19 @@ VideoRequest VideoRequest::FromEncodableList(const EncodableList& list) {
   if (!encodable_max_bytes.IsNull()) {
     decoded.set_max_bytes(std::get<int64_t>(encodable_max_bytes));
   }
+  auto& encodable_start_ms = list[9];
+  if (!encodable_start_ms.IsNull()) {
+    decoded.set_start_ms(std::get<int64_t>(encodable_start_ms));
+  }
+  auto& encodable_end_ms = list[10];
+  if (!encodable_end_ms.IsNull()) {
+    decoded.set_end_ms(std::get<int64_t>(encodable_end_ms));
+  }
   return decoded;
 }
 
 bool VideoRequest::operator==(const VideoRequest& other) const {
-  return PigeonInternalDeepEquals(source_, other.source_) && PigeonInternalDeepEquals(destination_, other.destination_) && PigeonInternalDeepEquals(max_short_side_, other.max_short_side_) && PigeonInternalDeepEquals(max_long_side_, other.max_long_side_) && PigeonInternalDeepEquals(video_bitrate_, other.video_bitrate_) && PigeonInternalDeepEquals(max_frame_rate_, other.max_frame_rate_) && PigeonInternalDeepEquals(max_bytes_, other.max_bytes_) && PigeonInternalDeepEquals(include_audio_, other.include_audio_);
+  return PigeonInternalDeepEquals(source_, other.source_) && PigeonInternalDeepEquals(destination_, other.destination_) && PigeonInternalDeepEquals(max_short_side_, other.max_short_side_) && PigeonInternalDeepEquals(max_long_side_, other.max_long_side_) && PigeonInternalDeepEquals(video_bitrate_, other.video_bitrate_) && PigeonInternalDeepEquals(max_frame_rate_, other.max_frame_rate_) && PigeonInternalDeepEquals(max_bytes_, other.max_bytes_) && PigeonInternalDeepEquals(include_audio_, other.include_audio_) && PigeonInternalDeepEquals(codec_, other.codec_) && PigeonInternalDeepEquals(start_ms_, other.start_ms_) && PigeonInternalDeepEquals(end_ms_, other.end_ms_) && PigeonInternalDeepEquals(rotate_quarter_turns_, other.rotate_quarter_turns_) && PigeonInternalDeepEquals(audio_bitrate_, other.audio_bitrate_);
 }
 
 bool VideoRequest::operator!=(const VideoRequest& other) const {
@@ -400,10 +485,171 @@ size_t VideoRequest::Hash() const {
   result = result * 31 + PigeonInternalDeepHash(max_frame_rate_);
   result = result * 31 + PigeonInternalDeepHash(max_bytes_);
   result = result * 31 + PigeonInternalDeepHash(include_audio_);
+  result = result * 31 + PigeonInternalDeepHash(codec_);
+  result = result * 31 + PigeonInternalDeepHash(start_ms_);
+  result = result * 31 + PigeonInternalDeepHash(end_ms_);
+  result = result * 31 + PigeonInternalDeepHash(rotate_quarter_turns_);
+  result = result * 31 + PigeonInternalDeepHash(audio_bitrate_);
   return result;
 }
 
 size_t PigeonInternalDeepHash(const VideoRequest& v) {
+  return v.Hash();
+}
+
+// ThumbnailRequest
+
+ThumbnailRequest::ThumbnailRequest(
+  const std::string& source,
+  const std::string& destination,
+  int64_t position_ms,
+  const ImageFormat& format,
+  int64_t quality)
+ : source_(source),
+    destination_(destination),
+    position_ms_(position_ms),
+    format_(format),
+    quality_(quality) {}
+
+ThumbnailRequest::ThumbnailRequest(
+  const std::string& source,
+  const std::string& destination,
+  int64_t position_ms,
+  const int64_t* max_short_side,
+  const int64_t* max_long_side,
+  const ImageFormat& format,
+  int64_t quality)
+ : source_(source),
+    destination_(destination),
+    position_ms_(position_ms),
+    max_short_side_(max_short_side ? std::optional<int64_t>(*max_short_side) : std::nullopt),
+    max_long_side_(max_long_side ? std::optional<int64_t>(*max_long_side) : std::nullopt),
+    format_(format),
+    quality_(quality) {}
+
+const std::string& ThumbnailRequest::source() const {
+  return source_;
+}
+
+void ThumbnailRequest::set_source(std::string_view value_arg) {
+  source_ = value_arg;
+}
+
+
+const std::string& ThumbnailRequest::destination() const {
+  return destination_;
+}
+
+void ThumbnailRequest::set_destination(std::string_view value_arg) {
+  destination_ = value_arg;
+}
+
+
+int64_t ThumbnailRequest::position_ms() const {
+  return position_ms_;
+}
+
+void ThumbnailRequest::set_position_ms(int64_t value_arg) {
+  position_ms_ = value_arg;
+}
+
+
+const int64_t* ThumbnailRequest::max_short_side() const {
+  return max_short_side_ ? &(*max_short_side_) : nullptr;
+}
+
+void ThumbnailRequest::set_max_short_side(const int64_t* value_arg) {
+  max_short_side_ = value_arg ? std::optional<int64_t>(*value_arg) : std::nullopt;
+}
+
+void ThumbnailRequest::set_max_short_side(int64_t value_arg) {
+  max_short_side_ = value_arg;
+}
+
+
+const int64_t* ThumbnailRequest::max_long_side() const {
+  return max_long_side_ ? &(*max_long_side_) : nullptr;
+}
+
+void ThumbnailRequest::set_max_long_side(const int64_t* value_arg) {
+  max_long_side_ = value_arg ? std::optional<int64_t>(*value_arg) : std::nullopt;
+}
+
+void ThumbnailRequest::set_max_long_side(int64_t value_arg) {
+  max_long_side_ = value_arg;
+}
+
+
+const ImageFormat& ThumbnailRequest::format() const {
+  return format_;
+}
+
+void ThumbnailRequest::set_format(const ImageFormat& value_arg) {
+  format_ = value_arg;
+}
+
+
+int64_t ThumbnailRequest::quality() const {
+  return quality_;
+}
+
+void ThumbnailRequest::set_quality(int64_t value_arg) {
+  quality_ = value_arg;
+}
+
+
+EncodableList ThumbnailRequest::ToEncodableList() const {
+  EncodableList list;
+  list.reserve(7);
+  list.push_back(EncodableValue(source_));
+  list.push_back(EncodableValue(destination_));
+  list.push_back(EncodableValue(position_ms_));
+  list.push_back(max_short_side_ ? EncodableValue(*max_short_side_) : EncodableValue());
+  list.push_back(max_long_side_ ? EncodableValue(*max_long_side_) : EncodableValue());
+  list.push_back(CustomEncodableValue(format_));
+  list.push_back(EncodableValue(quality_));
+  return list;
+}
+
+ThumbnailRequest ThumbnailRequest::FromEncodableList(const EncodableList& list) {
+  ThumbnailRequest decoded(
+    std::get<std::string>(list[0]),
+    std::get<std::string>(list[1]),
+    std::get<int64_t>(list[2]),
+    std::any_cast<const ImageFormat&>(std::get<CustomEncodableValue>(list[5])),
+    std::get<int64_t>(list[6]));
+  auto& encodable_max_short_side = list[3];
+  if (!encodable_max_short_side.IsNull()) {
+    decoded.set_max_short_side(std::get<int64_t>(encodable_max_short_side));
+  }
+  auto& encodable_max_long_side = list[4];
+  if (!encodable_max_long_side.IsNull()) {
+    decoded.set_max_long_side(std::get<int64_t>(encodable_max_long_side));
+  }
+  return decoded;
+}
+
+bool ThumbnailRequest::operator==(const ThumbnailRequest& other) const {
+  return PigeonInternalDeepEquals(source_, other.source_) && PigeonInternalDeepEquals(destination_, other.destination_) && PigeonInternalDeepEquals(position_ms_, other.position_ms_) && PigeonInternalDeepEquals(max_short_side_, other.max_short_side_) && PigeonInternalDeepEquals(max_long_side_, other.max_long_side_) && PigeonInternalDeepEquals(format_, other.format_) && PigeonInternalDeepEquals(quality_, other.quality_);
+}
+
+bool ThumbnailRequest::operator!=(const ThumbnailRequest& other) const {
+  return !(*this == other);
+}
+
+size_t ThumbnailRequest::Hash() const {
+  size_t result = 1;
+  result = result * 31 + PigeonInternalDeepHash(source_);
+  result = result * 31 + PigeonInternalDeepHash(destination_);
+  result = result * 31 + PigeonInternalDeepHash(position_ms_);
+  result = result * 31 + PigeonInternalDeepHash(max_short_side_);
+  result = result * 31 + PigeonInternalDeepHash(max_long_side_);
+  result = result * 31 + PigeonInternalDeepHash(format_);
+  result = result * 31 + PigeonInternalDeepHash(quality_);
+  return result;
+}
+
+size_t PigeonInternalDeepHash(const ThumbnailRequest& v) {
   return v.Hash();
 }
 
@@ -557,12 +803,14 @@ CompressionReply::CompressionReply(
   const int64_t* width,
   const int64_t* height,
   const int64_t* size_bytes,
-  const std::string* message)
+  const std::string* message,
+  const std::string* video_codec)
  : status_(status),
     width_(width ? std::optional<int64_t>(*width) : std::nullopt),
     height_(height ? std::optional<int64_t>(*height) : std::nullopt),
     size_bytes_(size_bytes ? std::optional<int64_t>(*size_bytes) : std::nullopt),
-    message_(message ? std::optional<std::string>(*message) : std::nullopt) {}
+    message_(message ? std::optional<std::string>(*message) : std::nullopt),
+    video_codec_(video_codec ? std::optional<std::string>(*video_codec) : std::nullopt) {}
 
 const CompressionStatus& CompressionReply::status() const {
   return status_;
@@ -625,14 +873,28 @@ void CompressionReply::set_message(std::string_view value_arg) {
 }
 
 
+const std::string* CompressionReply::video_codec() const {
+  return video_codec_ ? &(*video_codec_) : nullptr;
+}
+
+void CompressionReply::set_video_codec(const std::string_view* value_arg) {
+  video_codec_ = value_arg ? std::optional<std::string>(*value_arg) : std::nullopt;
+}
+
+void CompressionReply::set_video_codec(std::string_view value_arg) {
+  video_codec_ = value_arg;
+}
+
+
 EncodableList CompressionReply::ToEncodableList() const {
   EncodableList list;
-  list.reserve(5);
+  list.reserve(6);
   list.push_back(CustomEncodableValue(status_));
   list.push_back(width_ ? EncodableValue(*width_) : EncodableValue());
   list.push_back(height_ ? EncodableValue(*height_) : EncodableValue());
   list.push_back(size_bytes_ ? EncodableValue(*size_bytes_) : EncodableValue());
   list.push_back(message_ ? EncodableValue(*message_) : EncodableValue());
+  list.push_back(video_codec_ ? EncodableValue(*video_codec_) : EncodableValue());
   return list;
 }
 
@@ -655,11 +917,15 @@ CompressionReply CompressionReply::FromEncodableList(const EncodableList& list) 
   if (!encodable_message.IsNull()) {
     decoded.set_message(std::get<std::string>(encodable_message));
   }
+  auto& encodable_video_codec = list[5];
+  if (!encodable_video_codec.IsNull()) {
+    decoded.set_video_codec(std::get<std::string>(encodable_video_codec));
+  }
   return decoded;
 }
 
 bool CompressionReply::operator==(const CompressionReply& other) const {
-  return PigeonInternalDeepEquals(status_, other.status_) && PigeonInternalDeepEquals(width_, other.width_) && PigeonInternalDeepEquals(height_, other.height_) && PigeonInternalDeepEquals(size_bytes_, other.size_bytes_) && PigeonInternalDeepEquals(message_, other.message_);
+  return PigeonInternalDeepEquals(status_, other.status_) && PigeonInternalDeepEquals(width_, other.width_) && PigeonInternalDeepEquals(height_, other.height_) && PigeonInternalDeepEquals(size_bytes_, other.size_bytes_) && PigeonInternalDeepEquals(message_, other.message_) && PigeonInternalDeepEquals(video_codec_, other.video_codec_);
 }
 
 bool CompressionReply::operator!=(const CompressionReply& other) const {
@@ -673,6 +939,7 @@ size_t CompressionReply::Hash() const {
   result = result * 31 + PigeonInternalDeepHash(height_);
   result = result * 31 + PigeonInternalDeepHash(size_bytes_);
   result = result * 31 + PigeonInternalDeepHash(message_);
+  result = result * 31 + PigeonInternalDeepHash(video_codec_);
   return result;
 }
 
@@ -808,7 +1075,8 @@ VideoProbe::VideoProbe(
   const std::string* video_codec,
   bool is_hdr,
   bool has_audio,
-  const std::string* audio_codec)
+  const std::string* audio_codec,
+  const double* frame_rate)
  : width_(width),
     height_(height),
     rotation_degrees_(rotation_degrees),
@@ -817,7 +1085,8 @@ VideoProbe::VideoProbe(
     video_codec_(video_codec ? std::optional<std::string>(*video_codec) : std::nullopt),
     is_hdr_(is_hdr),
     has_audio_(has_audio),
-    audio_codec_(audio_codec ? std::optional<std::string>(*audio_codec) : std::nullopt) {}
+    audio_codec_(audio_codec ? std::optional<std::string>(*audio_codec) : std::nullopt),
+    frame_rate_(frame_rate ? std::optional<double>(*frame_rate) : std::nullopt) {}
 
 int64_t VideoProbe::width() const {
   return width_;
@@ -912,9 +1181,22 @@ void VideoProbe::set_audio_codec(std::string_view value_arg) {
 }
 
 
+const double* VideoProbe::frame_rate() const {
+  return frame_rate_ ? &(*frame_rate_) : nullptr;
+}
+
+void VideoProbe::set_frame_rate(const double* value_arg) {
+  frame_rate_ = value_arg ? std::optional<double>(*value_arg) : std::nullopt;
+}
+
+void VideoProbe::set_frame_rate(double value_arg) {
+  frame_rate_ = value_arg;
+}
+
+
 EncodableList VideoProbe::ToEncodableList() const {
   EncodableList list;
-  list.reserve(9);
+  list.reserve(10);
   list.push_back(EncodableValue(width_));
   list.push_back(EncodableValue(height_));
   list.push_back(EncodableValue(rotation_degrees_));
@@ -924,6 +1206,7 @@ EncodableList VideoProbe::ToEncodableList() const {
   list.push_back(EncodableValue(is_hdr_));
   list.push_back(EncodableValue(has_audio_));
   list.push_back(audio_codec_ ? EncodableValue(*audio_codec_) : EncodableValue());
+  list.push_back(frame_rate_ ? EncodableValue(*frame_rate_) : EncodableValue());
   return list;
 }
 
@@ -947,11 +1230,15 @@ VideoProbe VideoProbe::FromEncodableList(const EncodableList& list) {
   if (!encodable_audio_codec.IsNull()) {
     decoded.set_audio_codec(std::get<std::string>(encodable_audio_codec));
   }
+  auto& encodable_frame_rate = list[9];
+  if (!encodable_frame_rate.IsNull()) {
+    decoded.set_frame_rate(std::get<double>(encodable_frame_rate));
+  }
   return decoded;
 }
 
 bool VideoProbe::operator==(const VideoProbe& other) const {
-  return PigeonInternalDeepEquals(width_, other.width_) && PigeonInternalDeepEquals(height_, other.height_) && PigeonInternalDeepEquals(rotation_degrees_, other.rotation_degrees_) && PigeonInternalDeepEquals(duration_ms_, other.duration_ms_) && PigeonInternalDeepEquals(bitrate_, other.bitrate_) && PigeonInternalDeepEquals(video_codec_, other.video_codec_) && PigeonInternalDeepEquals(is_hdr_, other.is_hdr_) && PigeonInternalDeepEquals(has_audio_, other.has_audio_) && PigeonInternalDeepEquals(audio_codec_, other.audio_codec_);
+  return PigeonInternalDeepEquals(width_, other.width_) && PigeonInternalDeepEquals(height_, other.height_) && PigeonInternalDeepEquals(rotation_degrees_, other.rotation_degrees_) && PigeonInternalDeepEquals(duration_ms_, other.duration_ms_) && PigeonInternalDeepEquals(bitrate_, other.bitrate_) && PigeonInternalDeepEquals(video_codec_, other.video_codec_) && PigeonInternalDeepEquals(is_hdr_, other.is_hdr_) && PigeonInternalDeepEquals(has_audio_, other.has_audio_) && PigeonInternalDeepEquals(audio_codec_, other.audio_codec_) && PigeonInternalDeepEquals(frame_rate_, other.frame_rate_);
 }
 
 bool VideoProbe::operator!=(const VideoProbe& other) const {
@@ -969,6 +1256,7 @@ size_t VideoProbe::Hash() const {
   result = result * 31 + PigeonInternalDeepHash(is_hdr_);
   result = result * 31 + PigeonInternalDeepHash(has_audio_);
   result = result * 31 + PigeonInternalDeepHash(audio_codec_);
+  result = result * 31 + PigeonInternalDeepHash(frame_rate_);
   return result;
 }
 
@@ -994,18 +1282,26 @@ EncodableValue PigeonInternalCodecSerializer::ReadValueOfType(
         return encodable_enum_arg.IsNull() ? EncodableValue() : CustomEncodableValue(static_cast<ImageFormat>(enum_arg_value));
       }
     case 131: {
-        return CustomEncodableValue(VideoRequest::FromEncodableList(std::get<EncodableList>(ReadValue(stream))));
+        const auto& encodable_enum_arg = ReadValue(stream);
+        const int64_t enum_arg_value = encodable_enum_arg.IsNull() ? 0 : encodable_enum_arg.LongValue();
+        return encodable_enum_arg.IsNull() ? EncodableValue() : CustomEncodableValue(static_cast<VideoCodec>(enum_arg_value));
       }
     case 132: {
-        return CustomEncodableValue(ImageRequest::FromEncodableList(std::get<EncodableList>(ReadValue(stream))));
+        return CustomEncodableValue(VideoRequest::FromEncodableList(std::get<EncodableList>(ReadValue(stream))));
       }
     case 133: {
-        return CustomEncodableValue(CompressionReply::FromEncodableList(std::get<EncodableList>(ReadValue(stream))));
+        return CustomEncodableValue(ThumbnailRequest::FromEncodableList(std::get<EncodableList>(ReadValue(stream))));
       }
     case 134: {
-        return CustomEncodableValue(ImageProbe::FromEncodableList(std::get<EncodableList>(ReadValue(stream))));
+        return CustomEncodableValue(ImageRequest::FromEncodableList(std::get<EncodableList>(ReadValue(stream))));
       }
     case 135: {
+        return CustomEncodableValue(CompressionReply::FromEncodableList(std::get<EncodableList>(ReadValue(stream))));
+      }
+    case 136: {
+        return CustomEncodableValue(ImageProbe::FromEncodableList(std::get<EncodableList>(ReadValue(stream))));
+      }
+    case 137: {
         return CustomEncodableValue(VideoProbe::FromEncodableList(std::get<EncodableList>(ReadValue(stream))));
       }
     default:
@@ -1027,28 +1323,38 @@ void PigeonInternalCodecSerializer::WriteValue(
       WriteValue(EncodableValue(static_cast<int>(std::any_cast<ImageFormat>(*custom_value))), stream);
       return;
     }
-    if (custom_value->type() == typeid(VideoRequest)) {
+    if (custom_value->type() == typeid(VideoCodec)) {
       stream->WriteByte(131);
+      WriteValue(EncodableValue(static_cast<int>(std::any_cast<VideoCodec>(*custom_value))), stream);
+      return;
+    }
+    if (custom_value->type() == typeid(VideoRequest)) {
+      stream->WriteByte(132);
       WriteValue(EncodableValue(std::any_cast<VideoRequest>(*custom_value).ToEncodableList()), stream);
       return;
     }
+    if (custom_value->type() == typeid(ThumbnailRequest)) {
+      stream->WriteByte(133);
+      WriteValue(EncodableValue(std::any_cast<ThumbnailRequest>(*custom_value).ToEncodableList()), stream);
+      return;
+    }
     if (custom_value->type() == typeid(ImageRequest)) {
-      stream->WriteByte(132);
+      stream->WriteByte(134);
       WriteValue(EncodableValue(std::any_cast<ImageRequest>(*custom_value).ToEncodableList()), stream);
       return;
     }
     if (custom_value->type() == typeid(CompressionReply)) {
-      stream->WriteByte(133);
+      stream->WriteByte(135);
       WriteValue(EncodableValue(std::any_cast<CompressionReply>(*custom_value).ToEncodableList()), stream);
       return;
     }
     if (custom_value->type() == typeid(ImageProbe)) {
-      stream->WriteByte(134);
+      stream->WriteByte(136);
       WriteValue(EncodableValue(std::any_cast<ImageProbe>(*custom_value).ToEncodableList()), stream);
       return;
     }
     if (custom_value->type() == typeid(VideoProbe)) {
-      stream->WriteByte(135);
+      stream->WriteByte(137);
       WriteValue(EncodableValue(std::any_cast<VideoProbe>(*custom_value).ToEncodableList()), stream);
       return;
     }
@@ -1223,6 +1529,35 @@ void MediaCompressorHostApi::SetUp(
             } else {
               wrapped.push_back(EncodableValue());
             }
+            reply(EncodableValue(std::move(wrapped)));
+          });
+        } catch (const std::exception& exception) {
+          reply(WrapError(exception.what()));
+        }
+      });
+    } else {
+      channel.SetMessageHandler(nullptr);
+    }
+  }
+  {
+    BasicMessageChannel<> channel(binary_messenger, "dev.flutter.pigeon.native_media_compressor.MediaCompressorHostApi.videoThumbnail" + prepended_suffix, &GetCodec());
+    if (api != nullptr) {
+      channel.SetMessageHandler([api](const EncodableValue& message, const ::flutter::MessageReply<EncodableValue>& reply) {
+        try {
+          const auto& args = std::get<EncodableList>(message);
+          const auto& encodable_request_arg = args.at(0);
+          if (encodable_request_arg.IsNull()) {
+            reply(WrapError("request_arg unexpectedly null."));
+            return;
+          }
+          const auto& request_arg = std::any_cast<const ThumbnailRequest&>(std::get<CustomEncodableValue>(encodable_request_arg));
+          api->VideoThumbnail(request_arg, [reply](ErrorOr<CompressionReply>&& output) {
+            if (output.has_error()) {
+              reply(WrapError(output.error()));
+              return;
+            }
+            EncodableList wrapped;
+            wrapped.push_back(CustomEncodableValue(std::move(output).TakeValue()));
             reply(EncodableValue(std::move(wrapped)));
           });
         } catch (const std::exception& exception) {

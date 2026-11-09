@@ -21,19 +21,23 @@ abstract final class VideoPlanning {
   /// space, and encoders overshoot their target by a few percent.
   static const maxSourceShare = 0.85;
 
-  /// The automatic bitrate assumes at most this many frames per second: the
-  /// probe does not report the source rate, and a 60 fps budget would double
-  /// the bitrate of the far more common 30 fps recordings.
-  static const _assumedFrameRate = 30;
+  /// Frame rate assumed when the container does not report one.
+  static const _assumedFrameRate = 30.0;
+
+  /// HEVC reaches the quality of H.264 at about this share of its bitrate.
+  static const hevcShare = 0.7;
 
   /// Displayed output size for a [source] frame.
-  static (int, int) outputSize(VideoMetadata source, VideoOptions options) =>
-      MediaPlan.videoSize(
-        source.width,
-        source.height,
-        options.maxShortSide,
-        options.maxLongSide,
-      );
+  static (int, int) outputSize(VideoMetadata source, VideoOptions options) {
+    final (width, height) = MediaPlan.videoSize(
+      source.width,
+      source.height,
+      options.maxShortSide,
+      options.maxLongSide,
+    );
+
+    return options.rotateQuarterTurns.isOdd ? (height, width) : (width, height);
+  }
 
   /// Video bitrate for [source] under [options], never above
   /// [maxSourceShare] of the source's own video bitrate.
@@ -56,7 +60,7 @@ abstract final class VideoPlanning {
     final (width, height) = outputSize(source, options);
     final bitrate = videoBitrate(source, options);
     final audio = _keepsAudio(source, options) ? audioBitrate : 0;
-    final seconds = source.duration.inMilliseconds / 1000;
+    final seconds = keptDuration(source, options).inMilliseconds / 1000;
 
     return VideoEstimate(
       width: width,
@@ -72,7 +76,7 @@ abstract final class VideoPlanning {
     int? sourceVideo,
   ) {
     final targetBytes = options.targetBytes;
-    final seconds = source.duration.inMilliseconds / 1000;
+    final seconds = keptDuration(source, options).inMilliseconds / 1000;
     if (targetBytes != null && seconds > 0) {
       final audio = _keepsAudio(source, options) ? audioBitrate : 0;
       // The container and the first keyframe take a few percent on top.
@@ -85,12 +89,24 @@ abstract final class VideoPlanning {
       return sourceVideo * percent ~/ 100;
     }
     final (width, height) = outputSize(source, options);
-    final frameRate = math.min(
-      options.maxFrameRate ?? _assumedFrameRate,
-      _assumedFrameRate,
-    );
+    final sourceRate = source.frameRate ?? _assumedFrameRate;
+    final cap = options.maxFrameRate?.toDouble();
+    final frameRate = cap == null ? sourceRate : math.min(sourceRate, cap);
+    final efficiency = options.codec == VideoCodec.hevc ? hevcShare : 1.0;
 
-    return (width * height * frameRate * options.bitsPerPixel).round();
+    return (width * height * frameRate * options.bitsPerPixel * efficiency)
+        .round();
+  }
+
+  /// Length of the part of [source] that [options] keeps.
+  static Duration keptDuration(VideoMetadata source, VideoOptions options) {
+    final end =
+        options.trimEnd == null || options.trimEnd! > source.duration
+            ? source.duration
+            : options.trimEnd!;
+    final start = options.trimStart ?? Duration.zero;
+
+    return end > start ? end - start : Duration.zero;
   }
 
   static int? _sourceVideoBitrate(VideoMetadata source) {

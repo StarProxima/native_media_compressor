@@ -194,6 +194,11 @@ struct _NmcVideoRequest {
   int64_t* max_frame_rate;
   int64_t* max_bytes;
   gboolean include_audio;
+  NmcVideoCodec codec;
+  int64_t* start_ms;
+  int64_t* end_ms;
+  int64_t rotate_quarter_turns;
+  int64_t audio_bitrate;
 };
 
 G_DEFINE_TYPE(NmcVideoRequest, nmc_video_request, G_TYPE_OBJECT)
@@ -206,6 +211,8 @@ static void nmc_video_request_dispose(GObject* object) {
   g_clear_pointer(&self->max_long_side, g_free);
   g_clear_pointer(&self->max_frame_rate, g_free);
   g_clear_pointer(&self->max_bytes, g_free);
+  g_clear_pointer(&self->start_ms, g_free);
+  g_clear_pointer(&self->end_ms, g_free);
   G_OBJECT_CLASS(nmc_video_request_parent_class)->dispose(object);
 }
 
@@ -216,7 +223,7 @@ static void nmc_video_request_class_init(NmcVideoRequestClass* klass) {
   G_OBJECT_CLASS(klass)->dispose = nmc_video_request_dispose;
 }
 
-NmcVideoRequest* nmc_video_request_new(const gchar* source, const gchar* destination, int64_t* max_short_side, int64_t* max_long_side, int64_t video_bitrate, int64_t* max_frame_rate, int64_t* max_bytes, gboolean include_audio) {
+NmcVideoRequest* nmc_video_request_new(const gchar* source, const gchar* destination, int64_t* max_short_side, int64_t* max_long_side, int64_t video_bitrate, int64_t* max_frame_rate, int64_t* max_bytes, gboolean include_audio, NmcVideoCodec codec, int64_t* start_ms, int64_t* end_ms, int64_t rotate_quarter_turns, int64_t audio_bitrate) {
   NmcVideoRequest* self = NMC_VIDEO_REQUEST(g_object_new(nmc_video_request_get_type(), nullptr));
   self->source = g_strdup(source);
   self->destination = g_strdup(destination);
@@ -250,6 +257,23 @@ NmcVideoRequest* nmc_video_request_new(const gchar* source, const gchar* destina
     self->max_bytes = nullptr;
   }
   self->include_audio = include_audio;
+  self->codec = codec;
+  if (start_ms != nullptr) {
+    self->start_ms = static_cast<int64_t*>(malloc(sizeof(int64_t)));
+    *self->start_ms = *start_ms;
+  }
+  else {
+    self->start_ms = nullptr;
+  }
+  if (end_ms != nullptr) {
+    self->end_ms = static_cast<int64_t*>(malloc(sizeof(int64_t)));
+    *self->end_ms = *end_ms;
+  }
+  else {
+    self->end_ms = nullptr;
+  }
+  self->rotate_quarter_turns = rotate_quarter_turns;
+  self->audio_bitrate = audio_bitrate;
   return self;
 }
 
@@ -293,6 +317,31 @@ gboolean nmc_video_request_get_include_audio(NmcVideoRequest* self) {
   return self->include_audio;
 }
 
+NmcVideoCodec nmc_video_request_get_codec(NmcVideoRequest* self) {
+  g_return_val_if_fail(NMC_IS_VIDEO_REQUEST(self), static_cast<NmcVideoCodec>(0));
+  return self->codec;
+}
+
+int64_t* nmc_video_request_get_start_ms(NmcVideoRequest* self) {
+  g_return_val_if_fail(NMC_IS_VIDEO_REQUEST(self), nullptr);
+  return self->start_ms;
+}
+
+int64_t* nmc_video_request_get_end_ms(NmcVideoRequest* self) {
+  g_return_val_if_fail(NMC_IS_VIDEO_REQUEST(self), nullptr);
+  return self->end_ms;
+}
+
+int64_t nmc_video_request_get_rotate_quarter_turns(NmcVideoRequest* self) {
+  g_return_val_if_fail(NMC_IS_VIDEO_REQUEST(self), 0);
+  return self->rotate_quarter_turns;
+}
+
+int64_t nmc_video_request_get_audio_bitrate(NmcVideoRequest* self) {
+  g_return_val_if_fail(NMC_IS_VIDEO_REQUEST(self), 0);
+  return self->audio_bitrate;
+}
+
 static FlValue* nmc_video_request_to_list(NmcVideoRequest* self) {
   FlValue* values = fl_value_new_list();
   fl_value_append_take(values, fl_value_new_string(self->source));
@@ -303,6 +352,11 @@ static FlValue* nmc_video_request_to_list(NmcVideoRequest* self) {
   fl_value_append_take(values, self->max_frame_rate != nullptr ? fl_value_new_int(*self->max_frame_rate) : fl_value_new_null());
   fl_value_append_take(values, self->max_bytes != nullptr ? fl_value_new_int(*self->max_bytes) : fl_value_new_null());
   fl_value_append_take(values, fl_value_new_bool(self->include_audio));
+  fl_value_append_take(values, fl_value_new_custom(nmc_video_codec_type_id, fl_value_new_int(self->codec), (GDestroyNotify)fl_value_unref));
+  fl_value_append_take(values, self->start_ms != nullptr ? fl_value_new_int(*self->start_ms) : fl_value_new_null());
+  fl_value_append_take(values, self->end_ms != nullptr ? fl_value_new_int(*self->end_ms) : fl_value_new_null());
+  fl_value_append_take(values, fl_value_new_int(self->rotate_quarter_turns));
+  fl_value_append_take(values, fl_value_new_int(self->audio_bitrate));
   return values;
 }
 
@@ -343,7 +397,27 @@ static NmcVideoRequest* nmc_video_request_new_from_list(FlValue* values) {
   }
   FlValue* value7 = fl_value_get_list_value(values, 7);
   gboolean include_audio = fl_value_get_bool(value7);
-  return nmc_video_request_new(source, destination, max_short_side, max_long_side, video_bitrate, max_frame_rate, max_bytes, include_audio);
+  FlValue* value8 = fl_value_get_list_value(values, 8);
+  NmcVideoCodec codec = static_cast<NmcVideoCodec>(fl_value_get_int(reinterpret_cast<FlValue*>(const_cast<gpointer>(fl_value_get_custom_value(value8)))));
+  FlValue* value9 = fl_value_get_list_value(values, 9);
+  int64_t* start_ms = nullptr;
+  int64_t start_ms_value;
+  if (fl_value_get_type(value9) != FL_VALUE_TYPE_NULL) {
+    start_ms_value = fl_value_get_int(value9);
+    start_ms = &start_ms_value;
+  }
+  FlValue* value10 = fl_value_get_list_value(values, 10);
+  int64_t* end_ms = nullptr;
+  int64_t end_ms_value;
+  if (fl_value_get_type(value10) != FL_VALUE_TYPE_NULL) {
+    end_ms_value = fl_value_get_int(value10);
+    end_ms = &end_ms_value;
+  }
+  FlValue* value11 = fl_value_get_list_value(values, 11);
+  int64_t rotate_quarter_turns = fl_value_get_int(value11);
+  FlValue* value12 = fl_value_get_list_value(values, 12);
+  int64_t audio_bitrate = fl_value_get_int(value12);
+  return nmc_video_request_new(source, destination, max_short_side, max_long_side, video_bitrate, max_frame_rate, max_bytes, include_audio, codec, start_ms, end_ms, rotate_quarter_turns, audio_bitrate);
 }
 
 gboolean nmc_video_request_equals(NmcVideoRequest* a, NmcVideoRequest* b) {
@@ -389,6 +463,27 @@ gboolean nmc_video_request_equals(NmcVideoRequest* a, NmcVideoRequest* b) {
   if (a->include_audio != b->include_audio) {
     return FALSE;
   }
+  if (a->codec != b->codec) {
+    return FALSE;
+  }
+  if ((a->start_ms == nullptr) != (b->start_ms == nullptr)) {
+    return FALSE;
+  }
+  if (a->start_ms != nullptr && *a->start_ms != *b->start_ms) {
+    return FALSE;
+  }
+  if ((a->end_ms == nullptr) != (b->end_ms == nullptr)) {
+    return FALSE;
+  }
+  if (a->end_ms != nullptr && *a->end_ms != *b->end_ms) {
+    return FALSE;
+  }
+  if (a->rotate_quarter_turns != b->rotate_quarter_turns) {
+    return FALSE;
+  }
+  if (a->audio_bitrate != b->audio_bitrate) {
+    return FALSE;
+  }
   return TRUE;
 }
 
@@ -403,6 +498,190 @@ guint nmc_video_request_hash(NmcVideoRequest* self) {
   result = result * 31 + (self->max_frame_rate != nullptr ? static_cast<guint>(*self->max_frame_rate) : 0);
   result = result * 31 + (self->max_bytes != nullptr ? static_cast<guint>(*self->max_bytes) : 0);
   result = result * 31 + static_cast<guint>(self->include_audio);
+  result = result * 31 + static_cast<guint>(self->codec);
+  result = result * 31 + (self->start_ms != nullptr ? static_cast<guint>(*self->start_ms) : 0);
+  result = result * 31 + (self->end_ms != nullptr ? static_cast<guint>(*self->end_ms) : 0);
+  result = result * 31 + static_cast<guint>(self->rotate_quarter_turns);
+  result = result * 31 + static_cast<guint>(self->audio_bitrate);
+  return result;
+}
+
+struct _NmcThumbnailRequest {
+  GObject parent_instance;
+
+  gchar* source;
+  gchar* destination;
+  int64_t position_ms;
+  int64_t* max_short_side;
+  int64_t* max_long_side;
+  NmcImageFormat format;
+  int64_t quality;
+};
+
+G_DEFINE_TYPE(NmcThumbnailRequest, nmc_thumbnail_request, G_TYPE_OBJECT)
+
+static void nmc_thumbnail_request_dispose(GObject* object) {
+  NmcThumbnailRequest* self = NMC_THUMBNAIL_REQUEST(object);
+  g_clear_pointer(&self->source, g_free);
+  g_clear_pointer(&self->destination, g_free);
+  g_clear_pointer(&self->max_short_side, g_free);
+  g_clear_pointer(&self->max_long_side, g_free);
+  G_OBJECT_CLASS(nmc_thumbnail_request_parent_class)->dispose(object);
+}
+
+static void nmc_thumbnail_request_init(NmcThumbnailRequest* self) {
+}
+
+static void nmc_thumbnail_request_class_init(NmcThumbnailRequestClass* klass) {
+  G_OBJECT_CLASS(klass)->dispose = nmc_thumbnail_request_dispose;
+}
+
+NmcThumbnailRequest* nmc_thumbnail_request_new(const gchar* source, const gchar* destination, int64_t position_ms, int64_t* max_short_side, int64_t* max_long_side, NmcImageFormat format, int64_t quality) {
+  NmcThumbnailRequest* self = NMC_THUMBNAIL_REQUEST(g_object_new(nmc_thumbnail_request_get_type(), nullptr));
+  self->source = g_strdup(source);
+  self->destination = g_strdup(destination);
+  self->position_ms = position_ms;
+  if (max_short_side != nullptr) {
+    self->max_short_side = static_cast<int64_t*>(malloc(sizeof(int64_t)));
+    *self->max_short_side = *max_short_side;
+  }
+  else {
+    self->max_short_side = nullptr;
+  }
+  if (max_long_side != nullptr) {
+    self->max_long_side = static_cast<int64_t*>(malloc(sizeof(int64_t)));
+    *self->max_long_side = *max_long_side;
+  }
+  else {
+    self->max_long_side = nullptr;
+  }
+  self->format = format;
+  self->quality = quality;
+  return self;
+}
+
+const gchar* nmc_thumbnail_request_get_source(NmcThumbnailRequest* self) {
+  g_return_val_if_fail(NMC_IS_THUMBNAIL_REQUEST(self), nullptr);
+  return self->source;
+}
+
+const gchar* nmc_thumbnail_request_get_destination(NmcThumbnailRequest* self) {
+  g_return_val_if_fail(NMC_IS_THUMBNAIL_REQUEST(self), nullptr);
+  return self->destination;
+}
+
+int64_t nmc_thumbnail_request_get_position_ms(NmcThumbnailRequest* self) {
+  g_return_val_if_fail(NMC_IS_THUMBNAIL_REQUEST(self), 0);
+  return self->position_ms;
+}
+
+int64_t* nmc_thumbnail_request_get_max_short_side(NmcThumbnailRequest* self) {
+  g_return_val_if_fail(NMC_IS_THUMBNAIL_REQUEST(self), nullptr);
+  return self->max_short_side;
+}
+
+int64_t* nmc_thumbnail_request_get_max_long_side(NmcThumbnailRequest* self) {
+  g_return_val_if_fail(NMC_IS_THUMBNAIL_REQUEST(self), nullptr);
+  return self->max_long_side;
+}
+
+NmcImageFormat nmc_thumbnail_request_get_format(NmcThumbnailRequest* self) {
+  g_return_val_if_fail(NMC_IS_THUMBNAIL_REQUEST(self), static_cast<NmcImageFormat>(0));
+  return self->format;
+}
+
+int64_t nmc_thumbnail_request_get_quality(NmcThumbnailRequest* self) {
+  g_return_val_if_fail(NMC_IS_THUMBNAIL_REQUEST(self), 0);
+  return self->quality;
+}
+
+static FlValue* nmc_thumbnail_request_to_list(NmcThumbnailRequest* self) {
+  FlValue* values = fl_value_new_list();
+  fl_value_append_take(values, fl_value_new_string(self->source));
+  fl_value_append_take(values, fl_value_new_string(self->destination));
+  fl_value_append_take(values, fl_value_new_int(self->position_ms));
+  fl_value_append_take(values, self->max_short_side != nullptr ? fl_value_new_int(*self->max_short_side) : fl_value_new_null());
+  fl_value_append_take(values, self->max_long_side != nullptr ? fl_value_new_int(*self->max_long_side) : fl_value_new_null());
+  fl_value_append_take(values, fl_value_new_custom(nmc_image_format_type_id, fl_value_new_int(self->format), (GDestroyNotify)fl_value_unref));
+  fl_value_append_take(values, fl_value_new_int(self->quality));
+  return values;
+}
+
+static NmcThumbnailRequest* nmc_thumbnail_request_new_from_list(FlValue* values) {
+  FlValue* value0 = fl_value_get_list_value(values, 0);
+  const gchar* source = fl_value_get_string(value0);
+  FlValue* value1 = fl_value_get_list_value(values, 1);
+  const gchar* destination = fl_value_get_string(value1);
+  FlValue* value2 = fl_value_get_list_value(values, 2);
+  int64_t position_ms = fl_value_get_int(value2);
+  FlValue* value3 = fl_value_get_list_value(values, 3);
+  int64_t* max_short_side = nullptr;
+  int64_t max_short_side_value;
+  if (fl_value_get_type(value3) != FL_VALUE_TYPE_NULL) {
+    max_short_side_value = fl_value_get_int(value3);
+    max_short_side = &max_short_side_value;
+  }
+  FlValue* value4 = fl_value_get_list_value(values, 4);
+  int64_t* max_long_side = nullptr;
+  int64_t max_long_side_value;
+  if (fl_value_get_type(value4) != FL_VALUE_TYPE_NULL) {
+    max_long_side_value = fl_value_get_int(value4);
+    max_long_side = &max_long_side_value;
+  }
+  FlValue* value5 = fl_value_get_list_value(values, 5);
+  NmcImageFormat format = static_cast<NmcImageFormat>(fl_value_get_int(reinterpret_cast<FlValue*>(const_cast<gpointer>(fl_value_get_custom_value(value5)))));
+  FlValue* value6 = fl_value_get_list_value(values, 6);
+  int64_t quality = fl_value_get_int(value6);
+  return nmc_thumbnail_request_new(source, destination, position_ms, max_short_side, max_long_side, format, quality);
+}
+
+gboolean nmc_thumbnail_request_equals(NmcThumbnailRequest* a, NmcThumbnailRequest* b) {
+  if (a == b) {
+    return TRUE;
+  }
+  if (a == nullptr || b == nullptr) {
+    return FALSE;
+  }
+  if (g_strcmp0(a->source, b->source) != 0) {
+    return FALSE;
+  }
+  if (g_strcmp0(a->destination, b->destination) != 0) {
+    return FALSE;
+  }
+  if (a->position_ms != b->position_ms) {
+    return FALSE;
+  }
+  if ((a->max_short_side == nullptr) != (b->max_short_side == nullptr)) {
+    return FALSE;
+  }
+  if (a->max_short_side != nullptr && *a->max_short_side != *b->max_short_side) {
+    return FALSE;
+  }
+  if ((a->max_long_side == nullptr) != (b->max_long_side == nullptr)) {
+    return FALSE;
+  }
+  if (a->max_long_side != nullptr && *a->max_long_side != *b->max_long_side) {
+    return FALSE;
+  }
+  if (a->format != b->format) {
+    return FALSE;
+  }
+  if (a->quality != b->quality) {
+    return FALSE;
+  }
+  return TRUE;
+}
+
+guint nmc_thumbnail_request_hash(NmcThumbnailRequest* self) {
+  g_return_val_if_fail(NMC_IS_THUMBNAIL_REQUEST(self), 0);
+  guint result = 0;
+  result = result * 31 + (self->source != nullptr ? g_str_hash(self->source) : 0);
+  result = result * 31 + (self->destination != nullptr ? g_str_hash(self->destination) : 0);
+  result = result * 31 + static_cast<guint>(self->position_ms);
+  result = result * 31 + (self->max_short_side != nullptr ? static_cast<guint>(*self->max_short_side) : 0);
+  result = result * 31 + (self->max_long_side != nullptr ? static_cast<guint>(*self->max_long_side) : 0);
+  result = result * 31 + static_cast<guint>(self->format);
+  result = result * 31 + static_cast<guint>(self->quality);
   return result;
 }
 
@@ -579,6 +858,7 @@ struct _NmcCompressionReply {
   int64_t* height;
   int64_t* size_bytes;
   gchar* message;
+  gchar* video_codec;
 };
 
 G_DEFINE_TYPE(NmcCompressionReply, nmc_compression_reply, G_TYPE_OBJECT)
@@ -589,6 +869,7 @@ static void nmc_compression_reply_dispose(GObject* object) {
   g_clear_pointer(&self->height, g_free);
   g_clear_pointer(&self->size_bytes, g_free);
   g_clear_pointer(&self->message, g_free);
+  g_clear_pointer(&self->video_codec, g_free);
   G_OBJECT_CLASS(nmc_compression_reply_parent_class)->dispose(object);
 }
 
@@ -599,7 +880,7 @@ static void nmc_compression_reply_class_init(NmcCompressionReplyClass* klass) {
   G_OBJECT_CLASS(klass)->dispose = nmc_compression_reply_dispose;
 }
 
-NmcCompressionReply* nmc_compression_reply_new(NmcCompressionStatus status, int64_t* width, int64_t* height, int64_t* size_bytes, const gchar* message) {
+NmcCompressionReply* nmc_compression_reply_new(NmcCompressionStatus status, int64_t* width, int64_t* height, int64_t* size_bytes, const gchar* message, const gchar* video_codec) {
   NmcCompressionReply* self = NMC_COMPRESSION_REPLY(g_object_new(nmc_compression_reply_get_type(), nullptr));
   self->status = status;
   if (width != nullptr) {
@@ -629,6 +910,12 @@ NmcCompressionReply* nmc_compression_reply_new(NmcCompressionStatus status, int6
   else {
     self->message = nullptr;
   }
+  if (video_codec != nullptr) {
+    self->video_codec = g_strdup(video_codec);
+  }
+  else {
+    self->video_codec = nullptr;
+  }
   return self;
 }
 
@@ -657,6 +944,11 @@ const gchar* nmc_compression_reply_get_message(NmcCompressionReply* self) {
   return self->message;
 }
 
+const gchar* nmc_compression_reply_get_video_codec(NmcCompressionReply* self) {
+  g_return_val_if_fail(NMC_IS_COMPRESSION_REPLY(self), nullptr);
+  return self->video_codec;
+}
+
 static FlValue* nmc_compression_reply_to_list(NmcCompressionReply* self) {
   FlValue* values = fl_value_new_list();
   fl_value_append_take(values, fl_value_new_custom(nmc_compression_status_type_id, fl_value_new_int(self->status), (GDestroyNotify)fl_value_unref));
@@ -664,6 +956,7 @@ static FlValue* nmc_compression_reply_to_list(NmcCompressionReply* self) {
   fl_value_append_take(values, self->height != nullptr ? fl_value_new_int(*self->height) : fl_value_new_null());
   fl_value_append_take(values, self->size_bytes != nullptr ? fl_value_new_int(*self->size_bytes) : fl_value_new_null());
   fl_value_append_take(values, self->message != nullptr ? fl_value_new_string(self->message) : fl_value_new_null());
+  fl_value_append_take(values, self->video_codec != nullptr ? fl_value_new_string(self->video_codec) : fl_value_new_null());
   return values;
 }
 
@@ -696,7 +989,12 @@ static NmcCompressionReply* nmc_compression_reply_new_from_list(FlValue* values)
   if (fl_value_get_type(value4) != FL_VALUE_TYPE_NULL) {
     message = fl_value_get_string(value4);
   }
-  return nmc_compression_reply_new(status, width, height, size_bytes, message);
+  FlValue* value5 = fl_value_get_list_value(values, 5);
+  const gchar* video_codec = nullptr;
+  if (fl_value_get_type(value5) != FL_VALUE_TYPE_NULL) {
+    video_codec = fl_value_get_string(value5);
+  }
+  return nmc_compression_reply_new(status, width, height, size_bytes, message, video_codec);
 }
 
 gboolean nmc_compression_reply_equals(NmcCompressionReply* a, NmcCompressionReply* b) {
@@ -730,6 +1028,9 @@ gboolean nmc_compression_reply_equals(NmcCompressionReply* a, NmcCompressionRepl
   if (g_strcmp0(a->message, b->message) != 0) {
     return FALSE;
   }
+  if (g_strcmp0(a->video_codec, b->video_codec) != 0) {
+    return FALSE;
+  }
   return TRUE;
 }
 
@@ -741,6 +1042,7 @@ guint nmc_compression_reply_hash(NmcCompressionReply* self) {
   result = result * 31 + (self->height != nullptr ? static_cast<guint>(*self->height) : 0);
   result = result * 31 + (self->size_bytes != nullptr ? static_cast<guint>(*self->size_bytes) : 0);
   result = result * 31 + (self->message != nullptr ? g_str_hash(self->message) : 0);
+  result = result * 31 + (self->video_codec != nullptr ? g_str_hash(self->video_codec) : 0);
   return result;
 }
 
@@ -870,6 +1172,7 @@ struct _NmcVideoProbe {
   gboolean is_hdr;
   gboolean has_audio;
   gchar* audio_codec;
+  double* frame_rate;
 };
 
 G_DEFINE_TYPE(NmcVideoProbe, nmc_video_probe, G_TYPE_OBJECT)
@@ -879,6 +1182,7 @@ static void nmc_video_probe_dispose(GObject* object) {
   g_clear_pointer(&self->bitrate, g_free);
   g_clear_pointer(&self->video_codec, g_free);
   g_clear_pointer(&self->audio_codec, g_free);
+  g_clear_pointer(&self->frame_rate, g_free);
   G_OBJECT_CLASS(nmc_video_probe_parent_class)->dispose(object);
 }
 
@@ -889,7 +1193,7 @@ static void nmc_video_probe_class_init(NmcVideoProbeClass* klass) {
   G_OBJECT_CLASS(klass)->dispose = nmc_video_probe_dispose;
 }
 
-NmcVideoProbe* nmc_video_probe_new(int64_t width, int64_t height, int64_t rotation_degrees, int64_t duration_ms, int64_t* bitrate, const gchar* video_codec, gboolean is_hdr, gboolean has_audio, const gchar* audio_codec) {
+NmcVideoProbe* nmc_video_probe_new(int64_t width, int64_t height, int64_t rotation_degrees, int64_t duration_ms, int64_t* bitrate, const gchar* video_codec, gboolean is_hdr, gboolean has_audio, const gchar* audio_codec, double* frame_rate) {
   NmcVideoProbe* self = NMC_VIDEO_PROBE(g_object_new(nmc_video_probe_get_type(), nullptr));
   self->width = width;
   self->height = height;
@@ -915,6 +1219,13 @@ NmcVideoProbe* nmc_video_probe_new(int64_t width, int64_t height, int64_t rotati
   }
   else {
     self->audio_codec = nullptr;
+  }
+  if (frame_rate != nullptr) {
+    self->frame_rate = static_cast<double*>(malloc(sizeof(double)));
+    *self->frame_rate = *frame_rate;
+  }
+  else {
+    self->frame_rate = nullptr;
   }
   return self;
 }
@@ -964,6 +1275,11 @@ const gchar* nmc_video_probe_get_audio_codec(NmcVideoProbe* self) {
   return self->audio_codec;
 }
 
+double* nmc_video_probe_get_frame_rate(NmcVideoProbe* self) {
+  g_return_val_if_fail(NMC_IS_VIDEO_PROBE(self), nullptr);
+  return self->frame_rate;
+}
+
 static FlValue* nmc_video_probe_to_list(NmcVideoProbe* self) {
   FlValue* values = fl_value_new_list();
   fl_value_append_take(values, fl_value_new_int(self->width));
@@ -975,6 +1291,7 @@ static FlValue* nmc_video_probe_to_list(NmcVideoProbe* self) {
   fl_value_append_take(values, fl_value_new_bool(self->is_hdr));
   fl_value_append_take(values, fl_value_new_bool(self->has_audio));
   fl_value_append_take(values, self->audio_codec != nullptr ? fl_value_new_string(self->audio_codec) : fl_value_new_null());
+  fl_value_append_take(values, self->frame_rate != nullptr ? fl_value_new_float(*self->frame_rate) : fl_value_new_null());
   return values;
 }
 
@@ -1008,7 +1325,14 @@ static NmcVideoProbe* nmc_video_probe_new_from_list(FlValue* values) {
   if (fl_value_get_type(value8) != FL_VALUE_TYPE_NULL) {
     audio_codec = fl_value_get_string(value8);
   }
-  return nmc_video_probe_new(width, height, rotation_degrees, duration_ms, bitrate, video_codec, is_hdr, has_audio, audio_codec);
+  FlValue* value9 = fl_value_get_list_value(values, 9);
+  double* frame_rate = nullptr;
+  double frame_rate_value;
+  if (fl_value_get_type(value9) != FL_VALUE_TYPE_NULL) {
+    frame_rate_value = fl_value_get_float(value9);
+    frame_rate = &frame_rate_value;
+  }
+  return nmc_video_probe_new(width, height, rotation_degrees, duration_ms, bitrate, video_codec, is_hdr, has_audio, audio_codec, frame_rate);
 }
 
 gboolean nmc_video_probe_equals(NmcVideoProbe* a, NmcVideoProbe* b) {
@@ -1048,6 +1372,12 @@ gboolean nmc_video_probe_equals(NmcVideoProbe* a, NmcVideoProbe* b) {
   if (g_strcmp0(a->audio_codec, b->audio_codec) != 0) {
     return FALSE;
   }
+  if ((a->frame_rate == nullptr) != (b->frame_rate == nullptr)) {
+    return FALSE;
+  }
+  if (a->frame_rate != nullptr && !flpigeon_equals_double(*a->frame_rate, *b->frame_rate)) {
+    return FALSE;
+  }
   return TRUE;
 }
 
@@ -1063,6 +1393,7 @@ guint nmc_video_probe_hash(NmcVideoProbe* self) {
   result = result * 31 + static_cast<guint>(self->is_hdr);
   result = result * 31 + static_cast<guint>(self->has_audio);
   result = result * 31 + (self->audio_codec != nullptr ? g_str_hash(self->audio_codec) : 0);
+  result = result * 31 + (self->frame_rate != nullptr ? flpigeon_hash_double(*self->frame_rate) : 0);
   return result;
 }
 
@@ -1075,11 +1406,13 @@ G_DEFINE_TYPE(NmcMessageCodec, nmc_message_codec, fl_standard_message_codec_get_
 
 const int nmc_compression_status_type_id = 129;
 const int nmc_image_format_type_id = 130;
-const int nmc_video_request_type_id = 131;
-const int nmc_image_request_type_id = 132;
-const int nmc_compression_reply_type_id = 133;
-const int nmc_image_probe_type_id = 134;
-const int nmc_video_probe_type_id = 135;
+const int nmc_video_codec_type_id = 131;
+const int nmc_video_request_type_id = 132;
+const int nmc_thumbnail_request_type_id = 133;
+const int nmc_image_request_type_id = 134;
+const int nmc_compression_reply_type_id = 135;
+const int nmc_image_probe_type_id = 136;
+const int nmc_video_probe_type_id = 137;
 
 static gboolean nmc_message_codec_write_nmc_compression_status(FlStandardMessageCodec* codec, GByteArray* buffer, FlValue* value, GError** error) {
   uint8_t type = nmc_compression_status_type_id;
@@ -1093,10 +1426,23 @@ static gboolean nmc_message_codec_write_nmc_image_format(FlStandardMessageCodec*
   return fl_standard_message_codec_write_value(codec, buffer, value, error);
 }
 
+static gboolean nmc_message_codec_write_nmc_video_codec(FlStandardMessageCodec* codec, GByteArray* buffer, FlValue* value, GError** error) {
+  uint8_t type = nmc_video_codec_type_id;
+  g_byte_array_append(buffer, &type, sizeof(uint8_t));
+  return fl_standard_message_codec_write_value(codec, buffer, value, error);
+}
+
 static gboolean nmc_message_codec_write_nmc_video_request(FlStandardMessageCodec* codec, GByteArray* buffer, NmcVideoRequest* value, GError** error) {
   uint8_t type = nmc_video_request_type_id;
   g_byte_array_append(buffer, &type, sizeof(uint8_t));
   g_autoptr(FlValue) values = nmc_video_request_to_list(value);
+  return fl_standard_message_codec_write_value(codec, buffer, values, error);
+}
+
+static gboolean nmc_message_codec_write_nmc_thumbnail_request(FlStandardMessageCodec* codec, GByteArray* buffer, NmcThumbnailRequest* value, GError** error) {
+  uint8_t type = nmc_thumbnail_request_type_id;
+  g_byte_array_append(buffer, &type, sizeof(uint8_t));
+  g_autoptr(FlValue) values = nmc_thumbnail_request_to_list(value);
   return fl_standard_message_codec_write_value(codec, buffer, values, error);
 }
 
@@ -1135,8 +1481,12 @@ static gboolean nmc_message_codec_write_value(FlStandardMessageCodec* codec, GBy
         return nmc_message_codec_write_nmc_compression_status(codec, buffer, reinterpret_cast<FlValue*>(const_cast<gpointer>(fl_value_get_custom_value(value))), error);
       case nmc_image_format_type_id:
         return nmc_message_codec_write_nmc_image_format(codec, buffer, reinterpret_cast<FlValue*>(const_cast<gpointer>(fl_value_get_custom_value(value))), error);
+      case nmc_video_codec_type_id:
+        return nmc_message_codec_write_nmc_video_codec(codec, buffer, reinterpret_cast<FlValue*>(const_cast<gpointer>(fl_value_get_custom_value(value))), error);
       case nmc_video_request_type_id:
         return nmc_message_codec_write_nmc_video_request(codec, buffer, NMC_VIDEO_REQUEST(fl_value_get_custom_value_object(value)), error);
+      case nmc_thumbnail_request_type_id:
+        return nmc_message_codec_write_nmc_thumbnail_request(codec, buffer, NMC_THUMBNAIL_REQUEST(fl_value_get_custom_value_object(value)), error);
       case nmc_image_request_type_id:
         return nmc_message_codec_write_nmc_image_request(codec, buffer, NMC_IMAGE_REQUEST(fl_value_get_custom_value_object(value)), error);
       case nmc_compression_reply_type_id:
@@ -1159,6 +1509,10 @@ static FlValue* nmc_message_codec_read_nmc_image_format(FlStandardMessageCodec* 
   return fl_value_new_custom(nmc_image_format_type_id, fl_standard_message_codec_read_value(codec, buffer, offset, error), (GDestroyNotify)fl_value_unref);
 }
 
+static FlValue* nmc_message_codec_read_nmc_video_codec(FlStandardMessageCodec* codec, GBytes* buffer, size_t* offset, GError** error) {
+  return fl_value_new_custom(nmc_video_codec_type_id, fl_standard_message_codec_read_value(codec, buffer, offset, error), (GDestroyNotify)fl_value_unref);
+}
+
 static FlValue* nmc_message_codec_read_nmc_video_request(FlStandardMessageCodec* codec, GBytes* buffer, size_t* offset, GError** error) {
   g_autoptr(FlValue) values = fl_standard_message_codec_read_value(codec, buffer, offset, error);
   if (values == nullptr) {
@@ -1172,6 +1526,21 @@ static FlValue* nmc_message_codec_read_nmc_video_request(FlStandardMessageCodec*
   }
 
   return fl_value_new_custom_object(nmc_video_request_type_id, G_OBJECT(value));
+}
+
+static FlValue* nmc_message_codec_read_nmc_thumbnail_request(FlStandardMessageCodec* codec, GBytes* buffer, size_t* offset, GError** error) {
+  g_autoptr(FlValue) values = fl_standard_message_codec_read_value(codec, buffer, offset, error);
+  if (values == nullptr) {
+    return nullptr;
+  }
+
+  g_autoptr(NmcThumbnailRequest) value = nmc_thumbnail_request_new_from_list(values);
+  if (value == nullptr) {
+    g_set_error(error, FL_MESSAGE_CODEC_ERROR, FL_MESSAGE_CODEC_ERROR_FAILED, "Invalid data received for MessageData");
+    return nullptr;
+  }
+
+  return fl_value_new_custom_object(nmc_thumbnail_request_type_id, G_OBJECT(value));
 }
 
 static FlValue* nmc_message_codec_read_nmc_image_request(FlStandardMessageCodec* codec, GBytes* buffer, size_t* offset, GError** error) {
@@ -1240,8 +1609,12 @@ static FlValue* nmc_message_codec_read_value_of_type(FlStandardMessageCodec* cod
       return nmc_message_codec_read_nmc_compression_status(codec, buffer, offset, error);
     case nmc_image_format_type_id:
       return nmc_message_codec_read_nmc_image_format(codec, buffer, offset, error);
+    case nmc_video_codec_type_id:
+      return nmc_message_codec_read_nmc_video_codec(codec, buffer, offset, error);
     case nmc_video_request_type_id:
       return nmc_message_codec_read_nmc_video_request(codec, buffer, offset, error);
+    case nmc_thumbnail_request_type_id:
+      return nmc_message_codec_read_nmc_thumbnail_request(codec, buffer, offset, error);
     case nmc_image_request_type_id:
       return nmc_message_codec_read_nmc_image_request(codec, buffer, offset, error);
     case nmc_compression_reply_type_id:
@@ -1491,6 +1864,45 @@ static NmcMediaCompressorHostApiProbeVideoResponse* nmc_media_compressor_host_ap
   return self;
 }
 
+G_DECLARE_FINAL_TYPE(NmcMediaCompressorHostApiVideoThumbnailResponse, nmc_media_compressor_host_api_video_thumbnail_response, NMC, MEDIA_COMPRESSOR_HOST_API_VIDEO_THUMBNAIL_RESPONSE, GObject)
+
+struct _NmcMediaCompressorHostApiVideoThumbnailResponse {
+  GObject parent_instance;
+
+  FlValue* value;
+};
+
+G_DEFINE_TYPE(NmcMediaCompressorHostApiVideoThumbnailResponse, nmc_media_compressor_host_api_video_thumbnail_response, G_TYPE_OBJECT)
+
+static void nmc_media_compressor_host_api_video_thumbnail_response_dispose(GObject* object) {
+  NmcMediaCompressorHostApiVideoThumbnailResponse* self = NMC_MEDIA_COMPRESSOR_HOST_API_VIDEO_THUMBNAIL_RESPONSE(object);
+  g_clear_pointer(&self->value, fl_value_unref);
+  G_OBJECT_CLASS(nmc_media_compressor_host_api_video_thumbnail_response_parent_class)->dispose(object);
+}
+
+static void nmc_media_compressor_host_api_video_thumbnail_response_init(NmcMediaCompressorHostApiVideoThumbnailResponse* self) {
+}
+
+static void nmc_media_compressor_host_api_video_thumbnail_response_class_init(NmcMediaCompressorHostApiVideoThumbnailResponseClass* klass) {
+  G_OBJECT_CLASS(klass)->dispose = nmc_media_compressor_host_api_video_thumbnail_response_dispose;
+}
+
+static NmcMediaCompressorHostApiVideoThumbnailResponse* nmc_media_compressor_host_api_video_thumbnail_response_new(NmcCompressionReply* return_value) {
+  NmcMediaCompressorHostApiVideoThumbnailResponse* self = NMC_MEDIA_COMPRESSOR_HOST_API_VIDEO_THUMBNAIL_RESPONSE(g_object_new(nmc_media_compressor_host_api_video_thumbnail_response_get_type(), nullptr));
+  self->value = fl_value_new_list();
+  fl_value_append_take(self->value, fl_value_new_custom_object(nmc_compression_reply_type_id, G_OBJECT(return_value)));
+  return self;
+}
+
+static NmcMediaCompressorHostApiVideoThumbnailResponse* nmc_media_compressor_host_api_video_thumbnail_response_new_error(const gchar* code, const gchar* message, FlValue* details) {
+  NmcMediaCompressorHostApiVideoThumbnailResponse* self = NMC_MEDIA_COMPRESSOR_HOST_API_VIDEO_THUMBNAIL_RESPONSE(g_object_new(nmc_media_compressor_host_api_video_thumbnail_response_get_type(), nullptr));
+  self->value = fl_value_new_list();
+  fl_value_append_take(self->value, fl_value_new_string(code));
+  fl_value_append_take(self->value, fl_value_new_string(message != nullptr ? message : ""));
+  fl_value_append_take(self->value, details != nullptr ? fl_value_ref(details) : fl_value_new_null());
+  return self;
+}
+
 struct _NmcMediaCompressorHostApi {
   GObject parent_instance;
 
@@ -1600,6 +2012,19 @@ static void nmc_media_compressor_host_api_probe_video_cb(FlBasicMessageChannel* 
   self->vtable->probe_video(source, handle, self->user_data);
 }
 
+static void nmc_media_compressor_host_api_video_thumbnail_cb(FlBasicMessageChannel* channel, FlValue* message_, FlBasicMessageChannelResponseHandle* response_handle, gpointer user_data) {
+  NmcMediaCompressorHostApi* self = NMC_MEDIA_COMPRESSOR_HOST_API(user_data);
+
+  if (self->vtable == nullptr || self->vtable->video_thumbnail == nullptr) {
+    return;
+  }
+
+  FlValue* value0 = fl_value_get_list_value(message_, 0);
+  NmcThumbnailRequest* request = NMC_THUMBNAIL_REQUEST(fl_value_get_custom_value_object(value0));
+  g_autoptr(NmcMediaCompressorHostApiResponseHandle) handle = nmc_media_compressor_host_api_response_handle_new(channel, response_handle);
+  self->vtable->video_thumbnail(request, handle, self->user_data);
+}
+
 void nmc_media_compressor_host_api_set_method_handlers(FlBinaryMessenger* messenger, const gchar* suffix, const NmcMediaCompressorHostApiVTable* vtable, gpointer user_data, GDestroyNotify user_data_free_func) {
   g_autofree gchar* dot_suffix = suffix != nullptr ? g_strdup_printf(".%s", suffix) : g_strdup("");
   g_autoptr(NmcMediaCompressorHostApi) api_data = nmc_media_compressor_host_api_new(vtable, user_data, user_data_free_func);
@@ -1620,6 +2045,9 @@ void nmc_media_compressor_host_api_set_method_handlers(FlBinaryMessenger* messen
   g_autofree gchar* probe_video_channel_name = g_strdup_printf("dev.flutter.pigeon.native_media_compressor.MediaCompressorHostApi.probeVideo%s", dot_suffix);
   g_autoptr(FlBasicMessageChannel) probe_video_channel = fl_basic_message_channel_new(messenger, probe_video_channel_name, FL_MESSAGE_CODEC(codec));
   fl_basic_message_channel_set_message_handler(probe_video_channel, nmc_media_compressor_host_api_probe_video_cb, g_object_ref(api_data), g_object_unref);
+  g_autofree gchar* video_thumbnail_channel_name = g_strdup_printf("dev.flutter.pigeon.native_media_compressor.MediaCompressorHostApi.videoThumbnail%s", dot_suffix);
+  g_autoptr(FlBasicMessageChannel) video_thumbnail_channel = fl_basic_message_channel_new(messenger, video_thumbnail_channel_name, FL_MESSAGE_CODEC(codec));
+  fl_basic_message_channel_set_message_handler(video_thumbnail_channel, nmc_media_compressor_host_api_video_thumbnail_cb, g_object_ref(api_data), g_object_unref);
 }
 
 void nmc_media_compressor_host_api_clear_method_handlers(FlBinaryMessenger* messenger, const gchar* suffix) {
@@ -1641,6 +2069,9 @@ void nmc_media_compressor_host_api_clear_method_handlers(FlBinaryMessenger* mess
   g_autofree gchar* probe_video_channel_name = g_strdup_printf("dev.flutter.pigeon.native_media_compressor.MediaCompressorHostApi.probeVideo%s", dot_suffix);
   g_autoptr(FlBasicMessageChannel) probe_video_channel = fl_basic_message_channel_new(messenger, probe_video_channel_name, FL_MESSAGE_CODEC(codec));
   fl_basic_message_channel_set_message_handler(probe_video_channel, nullptr, nullptr, nullptr);
+  g_autofree gchar* video_thumbnail_channel_name = g_strdup_printf("dev.flutter.pigeon.native_media_compressor.MediaCompressorHostApi.videoThumbnail%s", dot_suffix);
+  g_autoptr(FlBasicMessageChannel) video_thumbnail_channel = fl_basic_message_channel_new(messenger, video_thumbnail_channel_name, FL_MESSAGE_CODEC(codec));
+  fl_basic_message_channel_set_message_handler(video_thumbnail_channel, nullptr, nullptr, nullptr);
 }
 
 void nmc_media_compressor_host_api_respond_compress_video(NmcMediaCompressorHostApiResponseHandle* response_handle, NmcCompressionReply* return_value) {
@@ -1704,6 +2135,22 @@ void nmc_media_compressor_host_api_respond_error_probe_video(NmcMediaCompressorH
   g_autoptr(GError) error = nullptr;
   if (!fl_basic_message_channel_respond(response_handle->channel, response_handle->response_handle, response->value, &error)) {
     g_warning("Failed to send response to %s.%s: %s", "MediaCompressorHostApi", "probeVideo", error->message);
+  }
+}
+
+void nmc_media_compressor_host_api_respond_video_thumbnail(NmcMediaCompressorHostApiResponseHandle* response_handle, NmcCompressionReply* return_value) {
+  g_autoptr(NmcMediaCompressorHostApiVideoThumbnailResponse) response = nmc_media_compressor_host_api_video_thumbnail_response_new(return_value);
+  g_autoptr(GError) error = nullptr;
+  if (!fl_basic_message_channel_respond(response_handle->channel, response_handle->response_handle, response->value, &error)) {
+    g_warning("Failed to send response to %s.%s: %s", "MediaCompressorHostApi", "videoThumbnail", error->message);
+  }
+}
+
+void nmc_media_compressor_host_api_respond_error_video_thumbnail(NmcMediaCompressorHostApiResponseHandle* response_handle, const gchar* code, const gchar* message, FlValue* details) {
+  g_autoptr(NmcMediaCompressorHostApiVideoThumbnailResponse) response = nmc_media_compressor_host_api_video_thumbnail_response_new_error(code, message, details);
+  g_autoptr(GError) error = nullptr;
+  if (!fl_basic_message_channel_respond(response_handle->channel, response_handle->response_handle, response->value, &error)) {
+    g_warning("Failed to send response to %s.%s: %s", "MediaCompressorHostApi", "videoThumbnail", error->message);
   }
 }
 

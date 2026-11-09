@@ -63,6 +63,14 @@ class _FakePlatform extends NativeMediaCompressorPlatform
   }
 
   @override
+  Future<CompressionResult> videoThumbnail({
+    required String source,
+    required String destination,
+    required Duration position,
+    required ImageOptions options,
+  }) async => const CompressionResult(status: CompressionStatus.unsupported);
+
+  @override
   Future<ImageMetadata?> probeImage(String source) async => null;
 
   @override

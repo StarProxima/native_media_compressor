@@ -30,12 +30,18 @@ enum CompressionStatus {
 
 enum ImageFormat { jpeg, png }
 
+/// Codec of the output video track.
+enum VideoCodec { h264, hevc }
+
 class VideoRequest {
   VideoRequest({
     required this.source,
     required this.destination,
     required this.videoBitrate,
     required this.includeAudio,
+    required this.codec,
+    required this.rotateQuarterTurns,
+    required this.audioBitrate,
   });
 
   String source;
@@ -46,6 +52,45 @@ class VideoRequest {
   int? maxFrameRate;
   int? maxBytes;
   bool includeAudio;
+
+  /// Preferred output codec; HEVC falls back to H.264 where the platform has
+  /// no HEVC encoder. The reply names the codec actually written.
+  VideoCodec codec;
+
+  /// Start of the kept range in the source timeline; null keeps from the
+  /// start.
+  int? startMs;
+
+  /// End of the kept range in the source timeline; null keeps to the end.
+  int? endMs;
+
+  /// Clockwise quarter turns on top of the displayed orientation, 0 to 3.
+  int rotateQuarterTurns;
+
+  /// Bitrate for audio that has to be re-encoded to AAC. AAC audio is copied
+  /// as is.
+  int audioBitrate;
+}
+
+class ThumbnailRequest {
+  ThumbnailRequest({
+    required this.source,
+    required this.destination,
+    required this.positionMs,
+    required this.format,
+    required this.quality,
+  });
+
+  String source;
+  String destination;
+
+  /// Frame position in the source timeline; past the end means the last
+  /// frame.
+  int positionMs;
+  int? maxShortSide;
+  int? maxLongSide;
+  ImageFormat format;
+  int quality;
 }
 
 class ImageRequest {
@@ -72,6 +117,9 @@ class CompressionReply {
   int? height;
   int? sizeBytes;
   String? message;
+
+  /// Codec of the written video track, as a MIME type such as `video/avc`.
+  String? videoCodec;
 }
 
 class ImageProbe {
@@ -106,6 +154,10 @@ class VideoProbe {
   bool isHdr;
   bool hasAudio;
   String? audioCodec;
+
+  /// Average frames per second of the video track, when the container
+  /// reports it.
+  double? frameRate;
 }
 
 @HostApi()
@@ -123,6 +175,9 @@ abstract class MediaCompressorHostApi {
 
   @async
   VideoProbe? probeVideo(String source);
+
+  @async
+  CompressionReply videoThumbnail(ThumbnailRequest request);
 }
 
 @FlutterApi()

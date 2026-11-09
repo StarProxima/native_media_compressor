@@ -32,6 +32,17 @@ enum CompressionStatus {
   skipped,
 }
 
+/// Codec of the output video track, for [VideoOptions.codec].
+enum VideoCodec {
+  /// H.264: plays everywhere, the default.
+  h264,
+
+  /// HEVC (H.265): about a third smaller at the same quality, but not every
+  /// player or browser decodes it. Where the platform has no HEVC encoder the
+  /// output is H.264; [CompressionResult.videoCodec] tells which one it got.
+  hevc,
+}
+
 /// Output format for [ImageOptions.format].
 enum ImageFormat {
   /// Lossy JPEG; [ImageOptions.quality] applies.
@@ -44,12 +55,13 @@ enum ImageFormat {
 /// Video compression settings.
 ///
 /// The frame is only ever scaled down, keeping its aspect ratio, until it fits
-/// both [maxShortSide] and [maxLongSide]. The output is SDR H.264 video in an
-/// MP4 container. HDR input (HLG, PQ, Dolby Vision) is tone-mapped to SDR on
-/// Android 7+ with a decoder for the source profile, iOS 14+ and macOS 11+,
-/// and by the browser on the web where it decodes the source; elsewhere it is
-/// [CompressionStatus.unsupported]. AAC audio is copied without
-/// re-encoding.
+/// both [maxShortSide] and [maxLongSide]. The output is SDR video in an MP4
+/// container, H.264 unless [codec] asks for HEVC. HDR input (HLG, PQ, Dolby
+/// Vision) is tone-mapped to SDR on Android 7+ with a decoder for the source
+/// profile, iOS 14+ and macOS 11+, and by the browser on the web where it
+/// decodes the source; elsewhere it is [CompressionStatus.unsupported]. AAC
+/// audio is copied without re-encoding; other audio is re-encoded to AAC at
+/// [audioBitrate] where the platform has an AAC encoder.
 ///
 /// The video bitrate comes from the first of [targetBytes], [videoBitrate]
 /// and [qualityPercent] that is set, and otherwise from [bitsPerPixel]. It
@@ -70,7 +82,14 @@ final class VideoOptions {
     this.maxBytes,
     this.minSavingsPercent,
     this.includeAudio = true,
+    this.audioBitrate = 128000,
+    this.codec = VideoCodec.h264,
+    this.trimStart,
+    this.trimEnd,
+    this.rotateQuarterTurns = 0,
   }) : assert(maxShortSide == null || maxShortSide > 0),
+       assert(audioBitrate > 0),
+       assert(rotateQuarterTurns >= 0 && rotateQuarterTurns < 4),
        assert(maxLongSide == null || maxLongSide > 0),
        assert(videoBitrate == null || videoBitrate > 0),
        assert(
@@ -138,9 +157,24 @@ final class VideoOptions {
   /// only outputs that are not smaller at all.
   final int? minSavingsPercent;
 
-  /// Whether to keep the audio tracks. Inputs with non-AAC audio are
-  /// [CompressionStatus.unsupported] unless this is false.
+  /// Whether to keep the audio tracks.
   final bool includeAudio;
+
+  /// Bitrate for audio that is not AAC and so has to be re-encoded, in bits
+  /// per second. AAC audio is copied and keeps its own bitrate.
+  final int audioBitrate;
+
+  /// Codec of the output video track.
+  final VideoCodec codec;
+
+  /// Start of the part to keep; null keeps from the beginning.
+  final Duration? trimStart;
+
+  /// End of the part to keep; null keeps to the end.
+  final Duration? trimEnd;
+
+  /// Clockwise quarter turns added to the displayed orientation, 0 to 3.
+  final int rotateQuarterTurns;
 
   /// A copy with the given fields replaced. Nullable fields cannot be cleared
   /// this way; create new options for that.
@@ -155,6 +189,11 @@ final class VideoOptions {
     int? maxBytes,
     int? minSavingsPercent,
     bool? includeAudio,
+    int? audioBitrate,
+    VideoCodec? codec,
+    Duration? trimStart,
+    Duration? trimEnd,
+    int? rotateQuarterTurns,
   }) => VideoOptions(
     maxShortSide: maxShortSide ?? this.maxShortSide,
     maxLongSide: maxLongSide ?? this.maxLongSide,
@@ -166,6 +205,11 @@ final class VideoOptions {
     maxBytes: maxBytes ?? this.maxBytes,
     minSavingsPercent: minSavingsPercent ?? this.minSavingsPercent,
     includeAudio: includeAudio ?? this.includeAudio,
+    audioBitrate: audioBitrate ?? this.audioBitrate,
+    codec: codec ?? this.codec,
+    trimStart: trimStart ?? this.trimStart,
+    trimEnd: trimEnd ?? this.trimEnd,
+    rotateQuarterTurns: rotateQuarterTurns ?? this.rotateQuarterTurns,
   );
 }
 
@@ -254,6 +298,7 @@ final class CompressionResult {
     this.height,
     this.sizeBytes,
     this.message,
+    this.videoCodec,
   });
 
   /// How the compression ended.
@@ -274,6 +319,10 @@ final class CompressionResult {
 
   /// Platform details about a failure, for logs.
   final String? message;
+
+  /// Codec of the written video track as a MIME type, `video/avc` or
+  /// `video/hevc`; null for images.
+  final String? videoCodec;
 
   /// Whether the output was written.
   bool get isCompressed => status == CompressionStatus.compressed;
@@ -378,6 +427,7 @@ final class VideoMetadata {
     this.bitrate,
     this.videoCodec,
     this.audioCodec,
+    this.frameRate,
   });
 
   /// Width in pixels as displayed, after rotation.
@@ -408,6 +458,9 @@ final class VideoMetadata {
 
   /// Codec MIME type of the first audio track, such as `audio/mp4a-latm`.
   final String? audioCodec;
+
+  /// Average frames per second, when the container reports it.
+  final double? frameRate;
 }
 
 /// A running video compression.

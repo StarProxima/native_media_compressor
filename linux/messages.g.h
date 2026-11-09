@@ -39,6 +39,18 @@ typedef enum {
 } NmcImageFormat;
 
 /**
+ * NmcVideoCodec:
+ * NATIVE_MEDIA_COMPRESSOR_VIDEO_CODEC_H264:
+ * NATIVE_MEDIA_COMPRESSOR_VIDEO_CODEC_HEVC:
+ *
+ * Codec of the output video track.
+ */
+typedef enum {
+  NATIVE_MEDIA_COMPRESSOR_VIDEO_CODEC_H264 = 0,
+  NATIVE_MEDIA_COMPRESSOR_VIDEO_CODEC_HEVC = 1
+} NmcVideoCodec;
+
+/**
  * NmcVideoRequest:
  *
  */
@@ -55,12 +67,17 @@ G_DECLARE_FINAL_TYPE(NmcVideoRequest, nmc_video_request, NMC, VIDEO_REQUEST, GOb
  * max_frame_rate: field in this object.
  * max_bytes: field in this object.
  * include_audio: field in this object.
+ * codec: field in this object.
+ * start_ms: field in this object.
+ * end_ms: field in this object.
+ * rotate_quarter_turns: field in this object.
+ * audio_bitrate: field in this object.
  *
  * Creates a new #VideoRequest object.
  *
  * Returns: a new #NmcVideoRequest
  */
-NmcVideoRequest* nmc_video_request_new(const gchar* source, const gchar* destination, int64_t* max_short_side, int64_t* max_long_side, int64_t video_bitrate, int64_t* max_frame_rate, int64_t* max_bytes, gboolean include_audio);
+NmcVideoRequest* nmc_video_request_new(const gchar* source, const gchar* destination, int64_t* max_short_side, int64_t* max_long_side, int64_t video_bitrate, int64_t* max_frame_rate, int64_t* max_bytes, gboolean include_audio, NmcVideoCodec codec, int64_t* start_ms, int64_t* end_ms, int64_t rotate_quarter_turns, int64_t audio_bitrate);
 
 /**
  * nmc_video_request_get_source
@@ -143,6 +160,59 @@ int64_t* nmc_video_request_get_max_bytes(NmcVideoRequest* object);
 gboolean nmc_video_request_get_include_audio(NmcVideoRequest* object);
 
 /**
+ * nmc_video_request_get_codec
+ * @object: a #NmcVideoRequest.
+ *
+ * Preferred output codec; HEVC falls back to H.264 where the platform has
+ * no HEVC encoder. The reply names the codec actually written.
+ *
+ * Returns: the field value.
+ */
+NmcVideoCodec nmc_video_request_get_codec(NmcVideoRequest* object);
+
+/**
+ * nmc_video_request_get_start_ms
+ * @object: a #NmcVideoRequest.
+ *
+ * Start of the kept range in the source timeline; null keeps from the
+ * start.
+ *
+ * Returns: the field value.
+ */
+int64_t* nmc_video_request_get_start_ms(NmcVideoRequest* object);
+
+/**
+ * nmc_video_request_get_end_ms
+ * @object: a #NmcVideoRequest.
+ *
+ * End of the kept range in the source timeline; null keeps to the end.
+ *
+ * Returns: the field value.
+ */
+int64_t* nmc_video_request_get_end_ms(NmcVideoRequest* object);
+
+/**
+ * nmc_video_request_get_rotate_quarter_turns
+ * @object: a #NmcVideoRequest.
+ *
+ * Clockwise quarter turns on top of the displayed orientation, 0 to 3.
+ *
+ * Returns: the field value.
+ */
+int64_t nmc_video_request_get_rotate_quarter_turns(NmcVideoRequest* object);
+
+/**
+ * nmc_video_request_get_audio_bitrate
+ * @object: a #NmcVideoRequest.
+ *
+ * Bitrate for audio that has to be re-encoded to AAC. AAC audio is copied
+ * as is.
+ *
+ * Returns: the field value.
+ */
+int64_t nmc_video_request_get_audio_bitrate(NmcVideoRequest* object);
+
+/**
  * nmc_video_request_equals:
  * @a: a #NmcVideoRequest.
  * @b: another #NmcVideoRequest.
@@ -162,6 +232,121 @@ gboolean nmc_video_request_equals(NmcVideoRequest* a, NmcVideoRequest* b);
  * Returns: the hash code.
  */
 guint nmc_video_request_hash(NmcVideoRequest* object);
+
+/**
+ * NmcThumbnailRequest:
+ *
+ */
+
+G_DECLARE_FINAL_TYPE(NmcThumbnailRequest, nmc_thumbnail_request, NMC, THUMBNAIL_REQUEST, GObject)
+
+/**
+ * nmc_thumbnail_request_new:
+ * source: field in this object.
+ * destination: field in this object.
+ * position_ms: field in this object.
+ * max_short_side: field in this object.
+ * max_long_side: field in this object.
+ * format: field in this object.
+ * quality: field in this object.
+ *
+ * Creates a new #ThumbnailRequest object.
+ *
+ * Returns: a new #NmcThumbnailRequest
+ */
+NmcThumbnailRequest* nmc_thumbnail_request_new(const gchar* source, const gchar* destination, int64_t position_ms, int64_t* max_short_side, int64_t* max_long_side, NmcImageFormat format, int64_t quality);
+
+/**
+ * nmc_thumbnail_request_get_source
+ * @object: a #NmcThumbnailRequest.
+ *
+ * Gets the value of the source field of @object.
+ *
+ * Returns: the field value.
+ */
+const gchar* nmc_thumbnail_request_get_source(NmcThumbnailRequest* object);
+
+/**
+ * nmc_thumbnail_request_get_destination
+ * @object: a #NmcThumbnailRequest.
+ *
+ * Gets the value of the destination field of @object.
+ *
+ * Returns: the field value.
+ */
+const gchar* nmc_thumbnail_request_get_destination(NmcThumbnailRequest* object);
+
+/**
+ * nmc_thumbnail_request_get_position_ms
+ * @object: a #NmcThumbnailRequest.
+ *
+ * Frame position in the source timeline; past the end means the last
+ * frame.
+ *
+ * Returns: the field value.
+ */
+int64_t nmc_thumbnail_request_get_position_ms(NmcThumbnailRequest* object);
+
+/**
+ * nmc_thumbnail_request_get_max_short_side
+ * @object: a #NmcThumbnailRequest.
+ *
+ * Gets the value of the maxShortSide field of @object.
+ *
+ * Returns: the field value.
+ */
+int64_t* nmc_thumbnail_request_get_max_short_side(NmcThumbnailRequest* object);
+
+/**
+ * nmc_thumbnail_request_get_max_long_side
+ * @object: a #NmcThumbnailRequest.
+ *
+ * Gets the value of the maxLongSide field of @object.
+ *
+ * Returns: the field value.
+ */
+int64_t* nmc_thumbnail_request_get_max_long_side(NmcThumbnailRequest* object);
+
+/**
+ * nmc_thumbnail_request_get_format
+ * @object: a #NmcThumbnailRequest.
+ *
+ * Gets the value of the format field of @object.
+ *
+ * Returns: the field value.
+ */
+NmcImageFormat nmc_thumbnail_request_get_format(NmcThumbnailRequest* object);
+
+/**
+ * nmc_thumbnail_request_get_quality
+ * @object: a #NmcThumbnailRequest.
+ *
+ * Gets the value of the quality field of @object.
+ *
+ * Returns: the field value.
+ */
+int64_t nmc_thumbnail_request_get_quality(NmcThumbnailRequest* object);
+
+/**
+ * nmc_thumbnail_request_equals:
+ * @a: a #NmcThumbnailRequest.
+ * @b: another #NmcThumbnailRequest.
+ *
+ * Checks if two #NmcThumbnailRequest objects are equal.
+ *
+ * Returns: TRUE if @a and @b are equal.
+ */
+gboolean nmc_thumbnail_request_equals(NmcThumbnailRequest* a, NmcThumbnailRequest* b);
+
+/**
+ * nmc_thumbnail_request_hash:
+ * @object: a #NmcThumbnailRequest.
+ *
+ * Calculates a hash code for a #NmcThumbnailRequest object.
+ *
+ * Returns: the hash code.
+ */
+guint nmc_thumbnail_request_hash(NmcThumbnailRequest* object);
 
 /**
  * NmcImageRequest:
@@ -280,12 +465,13 @@ G_DECLARE_FINAL_TYPE(NmcCompressionReply, nmc_compression_reply, NMC, COMPRESSIO
  * height: field in this object.
  * size_bytes: field in this object.
  * message: field in this object.
+ * video_codec: field in this object.
  *
  * Creates a new #CompressionReply object.
  *
  * Returns: a new #NmcCompressionReply
  */
-NmcCompressionReply* nmc_compression_reply_new(NmcCompressionStatus status, int64_t* width, int64_t* height, int64_t* size_bytes, const gchar* message);
+NmcCompressionReply* nmc_compression_reply_new(NmcCompressionStatus status, int64_t* width, int64_t* height, int64_t* size_bytes, const gchar* message, const gchar* video_codec);
 
 /**
  * nmc_compression_reply_get_status
@@ -336,6 +522,16 @@ int64_t* nmc_compression_reply_get_size_bytes(NmcCompressionReply* object);
  * Returns: the field value.
  */
 const gchar* nmc_compression_reply_get_message(NmcCompressionReply* object);
+
+/**
+ * nmc_compression_reply_get_video_codec
+ * @object: a #NmcCompressionReply.
+ *
+ * Codec of the written video track, as a MIME type such as `video/avc`.
+ *
+ * Returns: the field value.
+ */
+const gchar* nmc_compression_reply_get_video_codec(NmcCompressionReply* object);
 
 /**
  * nmc_compression_reply_equals:
@@ -457,12 +653,13 @@ G_DECLARE_FINAL_TYPE(NmcVideoProbe, nmc_video_probe, NMC, VIDEO_PROBE, GObject)
  * is_hdr: field in this object.
  * has_audio: field in this object.
  * audio_codec: field in this object.
+ * frame_rate: field in this object.
  *
  * Creates a new #VideoProbe object.
  *
  * Returns: a new #NmcVideoProbe
  */
-NmcVideoProbe* nmc_video_probe_new(int64_t width, int64_t height, int64_t rotation_degrees, int64_t duration_ms, int64_t* bitrate, const gchar* video_codec, gboolean is_hdr, gboolean has_audio, const gchar* audio_codec);
+NmcVideoProbe* nmc_video_probe_new(int64_t width, int64_t height, int64_t rotation_degrees, int64_t duration_ms, int64_t* bitrate, const gchar* video_codec, gboolean is_hdr, gboolean has_audio, const gchar* audio_codec, double* frame_rate);
 
 /**
  * nmc_video_probe_get_width
@@ -555,6 +752,17 @@ gboolean nmc_video_probe_get_has_audio(NmcVideoProbe* object);
 const gchar* nmc_video_probe_get_audio_codec(NmcVideoProbe* object);
 
 /**
+ * nmc_video_probe_get_frame_rate
+ * @object: a #NmcVideoProbe.
+ *
+ * Average frames per second of the video track, when the container
+ * reports it.
+ *
+ * Returns: the field value.
+ */
+double* nmc_video_probe_get_frame_rate(NmcVideoProbe* object);
+
+/**
  * nmc_video_probe_equals:
  * @a: a #NmcVideoProbe.
  * @b: another #NmcVideoProbe.
@@ -586,7 +794,9 @@ G_DECLARE_FINAL_TYPE(NmcMessageCodec, nmc_message_codec, NMC, MESSAGE_CODEC, FlS
  */
 extern const int nmc_compression_status_type_id;
 extern const int nmc_image_format_type_id;
+extern const int nmc_video_codec_type_id;
 extern const int nmc_video_request_type_id;
+extern const int nmc_thumbnail_request_type_id;
 extern const int nmc_image_request_type_id;
 extern const int nmc_compression_reply_type_id;
 extern const int nmc_image_probe_type_id;
@@ -630,6 +840,7 @@ typedef struct {
   NmcMediaCompressorHostApiCancelResponse* (*cancel)(int64_t task_id, gpointer user_data);
   void (*probe_image)(const gchar* source, NmcMediaCompressorHostApiResponseHandle* response_handle, gpointer user_data);
   void (*probe_video)(const gchar* source, NmcMediaCompressorHostApiResponseHandle* response_handle, gpointer user_data);
+  void (*video_thumbnail)(NmcThumbnailRequest* request, NmcMediaCompressorHostApiResponseHandle* response_handle, gpointer user_data);
 } NmcMediaCompressorHostApiVTable;
 
 /**
@@ -734,6 +945,26 @@ void nmc_media_compressor_host_api_respond_probe_video(NmcMediaCompressorHostApi
  * Responds with an error to MediaCompressorHostApi.probeVideo. 
  */
 void nmc_media_compressor_host_api_respond_error_probe_video(NmcMediaCompressorHostApiResponseHandle* response_handle, const gchar* code, const gchar* message, FlValue* details);
+
+/**
+ * nmc_media_compressor_host_api_respond_video_thumbnail:
+ * @response_handle: a #NmcMediaCompressorHostApiResponseHandle.
+ * @return_value: location to write the value returned by this method.
+ *
+ * Responds to MediaCompressorHostApi.videoThumbnail. 
+ */
+void nmc_media_compressor_host_api_respond_video_thumbnail(NmcMediaCompressorHostApiResponseHandle* response_handle, NmcCompressionReply* return_value);
+
+/**
+ * nmc_media_compressor_host_api_respond_error_video_thumbnail:
+ * @response_handle: a #NmcMediaCompressorHostApiResponseHandle.
+ * @code: error code.
+ * @message: error message.
+ * @details: (allow-none): error details or %NULL.
+ *
+ * Responds with an error to MediaCompressorHostApi.videoThumbnail. 
+ */
+void nmc_media_compressor_host_api_respond_error_video_thumbnail(NmcMediaCompressorHostApiResponseHandle* response_handle, const gchar* code, const gchar* message, FlValue* details);
 
 G_DECLARE_FINAL_TYPE(NmcMediaCompressorFlutterApiOnProgressResponse, nmc_media_compressor_flutter_api_on_progress_response, NMC, MEDIA_COMPRESSOR_FLUTTER_API_ON_PROGRESS_RESPONSE, GObject)
 
