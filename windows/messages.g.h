@@ -71,6 +71,12 @@ enum class ImageFormat {
   kPng = 1
 };
 
+// Codec of the output video track.
+enum class VideoCodec {
+  kH264 = 0,
+  kHevc = 1
+};
+
 
 // Generated class from Pigeon that represents data sent in messages.
 class VideoRequest {
@@ -80,7 +86,10 @@ class VideoRequest {
     const std::string& source,
     const std::string& destination,
     int64_t video_bitrate,
-    bool include_audio);
+    bool include_audio,
+    const VideoCodec& codec,
+    int64_t rotate_quarter_turns,
+    int64_t audio_bitrate);
 
   // Constructs an object setting all fields.
   explicit VideoRequest(
@@ -91,7 +100,12 @@ class VideoRequest {
     int64_t video_bitrate,
     const int64_t* max_frame_rate,
     const int64_t* max_bytes,
-    bool include_audio);
+    bool include_audio,
+    const VideoCodec& codec,
+    const int64_t* start_ms,
+    const int64_t* end_ms,
+    int64_t rotate_quarter_turns,
+    int64_t audio_bitrate);
 
   const std::string& source() const;
   void set_source(std::string_view value_arg);
@@ -121,6 +135,31 @@ class VideoRequest {
   bool include_audio() const;
   void set_include_audio(bool value_arg);
 
+  // Preferred output codec; HEVC falls back to H.264 where the platform has
+  // no HEVC encoder. The reply names the codec actually written.
+  const VideoCodec& codec() const;
+  void set_codec(const VideoCodec& value_arg);
+
+  // Start of the kept range in the source timeline; null keeps from the
+  // start.
+  const int64_t* start_ms() const;
+  void set_start_ms(const int64_t* value_arg);
+  void set_start_ms(int64_t value_arg);
+
+  // End of the kept range in the source timeline; null keeps to the end.
+  const int64_t* end_ms() const;
+  void set_end_ms(const int64_t* value_arg);
+  void set_end_ms(int64_t value_arg);
+
+  // Clockwise quarter turns on top of the displayed orientation, 0 to 3.
+  int64_t rotate_quarter_turns() const;
+  void set_rotate_quarter_turns(int64_t value_arg);
+
+  // Bitrate for audio that has to be re-encoded to AAC. AAC audio is copied
+  // as is.
+  int64_t audio_bitrate() const;
+  void set_audio_bitrate(int64_t value_arg);
+
   bool operator==(const VideoRequest& other) const;
   bool operator!=(const VideoRequest& other) const;
   /// Returns a hash code value for the object. This method is supported for the benefit of hash tables.
@@ -139,6 +178,77 @@ class VideoRequest {
   std::optional<int64_t> max_frame_rate_;
   std::optional<int64_t> max_bytes_;
   bool include_audio_;
+  VideoCodec codec_;
+  std::optional<int64_t> start_ms_;
+  std::optional<int64_t> end_ms_;
+  int64_t rotate_quarter_turns_;
+  int64_t audio_bitrate_;
+};
+
+
+// Generated class from Pigeon that represents data sent in messages.
+class ThumbnailRequest {
+ public:
+  // Constructs an object setting all non-nullable fields.
+  explicit ThumbnailRequest(
+    const std::string& source,
+    const std::string& destination,
+    int64_t position_ms,
+    const ImageFormat& format,
+    int64_t quality);
+
+  // Constructs an object setting all fields.
+  explicit ThumbnailRequest(
+    const std::string& source,
+    const std::string& destination,
+    int64_t position_ms,
+    const int64_t* max_short_side,
+    const int64_t* max_long_side,
+    const ImageFormat& format,
+    int64_t quality);
+
+  const std::string& source() const;
+  void set_source(std::string_view value_arg);
+
+  const std::string& destination() const;
+  void set_destination(std::string_view value_arg);
+
+  // Frame position in the source timeline; past the end means the last
+  // frame.
+  int64_t position_ms() const;
+  void set_position_ms(int64_t value_arg);
+
+  const int64_t* max_short_side() const;
+  void set_max_short_side(const int64_t* value_arg);
+  void set_max_short_side(int64_t value_arg);
+
+  const int64_t* max_long_side() const;
+  void set_max_long_side(const int64_t* value_arg);
+  void set_max_long_side(int64_t value_arg);
+
+  const ImageFormat& format() const;
+  void set_format(const ImageFormat& value_arg);
+
+  int64_t quality() const;
+  void set_quality(int64_t value_arg);
+
+  bool operator==(const ThumbnailRequest& other) const;
+  bool operator!=(const ThumbnailRequest& other) const;
+  /// Returns a hash code value for the object. This method is supported for the benefit of hash tables.
+  size_t Hash() const;
+ private:
+  static ThumbnailRequest FromEncodableList(const ::flutter::EncodableList& list);
+  ::flutter::EncodableList ToEncodableList() const;
+  friend class MediaCompressorHostApi;
+  friend class MediaCompressorFlutterApi;
+  friend class PigeonInternalCodecSerializer;
+  std::string source_;
+  std::string destination_;
+  int64_t position_ms_;
+  std::optional<int64_t> max_short_side_;
+  std::optional<int64_t> max_long_side_;
+  ImageFormat format_;
+  int64_t quality_;
 };
 
 
@@ -212,7 +322,8 @@ class CompressionReply {
     const int64_t* width,
     const int64_t* height,
     const int64_t* size_bytes,
-    const std::string* message);
+    const std::string* message,
+    const std::string* video_codec);
 
   const CompressionStatus& status() const;
   void set_status(const CompressionStatus& value_arg);
@@ -233,6 +344,11 @@ class CompressionReply {
   void set_message(const std::string_view* value_arg);
   void set_message(std::string_view value_arg);
 
+  // Codec of the written video track, as a MIME type such as `video/avc`.
+  const std::string* video_codec() const;
+  void set_video_codec(const std::string_view* value_arg);
+  void set_video_codec(std::string_view value_arg);
+
   bool operator==(const CompressionReply& other) const;
   bool operator!=(const CompressionReply& other) const;
   /// Returns a hash code value for the object. This method is supported for the benefit of hash tables.
@@ -248,6 +364,7 @@ class CompressionReply {
   std::optional<int64_t> height_;
   std::optional<int64_t> size_bytes_;
   std::optional<std::string> message_;
+  std::optional<std::string> video_codec_;
 };
 
 
@@ -319,7 +436,8 @@ class VideoProbe {
     const std::string* video_codec,
     bool is_hdr,
     bool has_audio,
-    const std::string* audio_codec);
+    const std::string* audio_codec,
+    const double* frame_rate);
 
   int64_t width() const;
   void set_width(int64_t value_arg);
@@ -351,6 +469,12 @@ class VideoProbe {
   void set_audio_codec(const std::string_view* value_arg);
   void set_audio_codec(std::string_view value_arg);
 
+  // Average frames per second of the video track, when the container
+  // reports it.
+  const double* frame_rate() const;
+  void set_frame_rate(const double* value_arg);
+  void set_frame_rate(double value_arg);
+
   bool operator==(const VideoProbe& other) const;
   bool operator!=(const VideoProbe& other) const;
   /// Returns a hash code value for the object. This method is supported for the benefit of hash tables.
@@ -370,6 +494,7 @@ class VideoProbe {
   bool is_hdr_;
   bool has_audio_;
   std::optional<std::string> audio_codec_;
+  std::optional<double> frame_rate_;
 };
 
 
@@ -410,6 +535,9 @@ class MediaCompressorHostApi {
   virtual void ProbeVideo(
     const std::string& source,
     std::function<void(ErrorOr<std::optional<VideoProbe>> reply)> result) = 0;
+  virtual void VideoThumbnail(
+    const ThumbnailRequest& request,
+    std::function<void(ErrorOr<CompressionReply> reply)> result) = 0;
 
   // The codec used by MediaCompressorHostApi.
   static const ::flutter::StandardMessageCodec& GetCodec();

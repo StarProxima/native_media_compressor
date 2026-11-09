@@ -272,6 +272,116 @@ TEST(TranscodeVideo, NonVideoInputIsRejected) {
   EXPECT_FALSE(ProbeVideoFile(source).has_value());
 }
 
+TEST(SaveVideoFrame, NonVideoInputLeavesNoOutput) {
+  TempDirectory directory;
+  const auto source = directory.File(L"source.bmp");
+  const auto destination = directory.File(L"frame.jpg");
+  WriteBmp(source, 16, 16);
+  WriteText(destination, "stale");
+
+  ThumbnailJob job;
+  job.source = source;
+  job.destination = destination;
+  job.position_ms = 1000;
+  const Outcome outcome = SaveVideoFrame(job);
+
+  EXPECT_TRUE(outcome.status == Status::kFailed || outcome.status == Status::kUnsupported);
+  EXPECT_EQ(ReadText(destination), "stale");
+  EXPECT_EQ(directory.Entries().size(), 2u);
+}
+
+TEST(ResolveTrim, ConvertsMillisecondsToTicks) {
+  const auto range = ResolveTrim(2000, 5000, 80000000);
+  ASSERT_TRUE(range.has_value());
+  EXPECT_EQ(range->start, int64_t{20000000});
+  EXPECT_EQ(range->end, int64_t{50000000});
+}
+
+TEST(ResolveTrim, AnEndPastTheDurationKeepsToTheEnd) {
+  const auto range = ResolveTrim(1000, 30000, 20000000);
+  ASSERT_TRUE(range.has_value());
+  EXPECT_EQ(range->start, int64_t{10000000});
+  EXPECT_EQ(range->end, TrimRange::kOpenEnd);
+}
+
+TEST(ResolveTrim, NoBoundsKeepEverything) {
+  const auto range = ResolveTrim(std::nullopt, std::nullopt, 0);
+  ASSERT_TRUE(range.has_value());
+  EXPECT_EQ(range->start, int64_t{0});
+  EXPECT_EQ(range->end, TrimRange::kOpenEnd);
+  EXPECT_EQ(ResolveTrim(-500, std::nullopt, 0)->start, int64_t{0});
+}
+
+TEST(ResolveTrim, AnEmptyRangeKeepsNothing) {
+  EXPECT_FALSE(ResolveTrim(3000, 3000, 0).has_value());
+  EXPECT_FALSE(ResolveTrim(4000, 1000, 80000000).has_value());
+  EXPECT_FALSE(ResolveTrim(9000, std::nullopt, 80000000).has_value());
+  EXPECT_FALSE(ResolveTrim(std::nullopt, 0, 80000000).has_value());
+}
+
+TEST(CropPcm, KeepsABufferInsideTheRange) {
+  TrimRange range;
+  range.start = 10000000;
+  range.end = 20000000;
+  const PcmCrop crop = CropPcm(12000000, 1024, 48000, range);
+  EXPECT_EQ(crop.skip_frames, 0u);
+  EXPECT_EQ(crop.keep_frames, 1024u);
+}
+
+TEST(CropPcm, CutsBothEdgesToTheFrame) {
+  TrimRange range;
+  range.start = 10000000;
+  range.end = 10100000;
+  // 48 kHz, 4800 frames from 0.99 s: 480 frames lie before the start and
+  // 480 after it fit in the 10 ms range.
+  const PcmCrop crop = CropPcm(9900000, 4800, 48000, range);
+  EXPECT_EQ(crop.skip_frames, 480u);
+  EXPECT_EQ(crop.keep_frames, 480u);
+}
+
+TEST(CropPcm, DropsBuffersOutsideTheRange) {
+  TrimRange range;
+  range.start = 10000000;
+  range.end = 20000000;
+  EXPECT_EQ(CropPcm(0, 1024, 48000, range).keep_frames, 0u);
+  EXPECT_EQ(CropPcm(20000000, 1024, 48000, range).keep_frames, 0u);
+  EXPECT_EQ(CropPcm(12000000, 1024, 0, range).keep_frames, 0u);
+}
+
+TEST(CropPcm, AnOpenEndKeepsTheTail) {
+  TrimRange range;
+  range.start = 10000000;
+  const PcmCrop crop = CropPcm(9990000, 960, 48000, range);
+  EXPECT_EQ(crop.skip_frames, 48u);
+  EXPECT_EQ(crop.keep_frames, 912u);
+}
+
+TEST(TotalRotation, AddsClockwiseQuarterTurns) {
+  EXPECT_EQ(TotalRotation(0, 0), 0u);
+  EXPECT_EQ(TotalRotation(0, 1), 90u);
+  EXPECT_EQ(TotalRotation(90, 1), 180u);
+  EXPECT_EQ(TotalRotation(270, 1), 0u);
+  EXPECT_EQ(TotalRotation(180, 3), 90u);
+  EXPECT_EQ(TotalRotation(90, -1), 0u);
+}
+
+TEST(AacBytesPerSecond, PicksTheNearestAllowedRate) {
+  EXPECT_EQ(AacBytesPerSecond(128000), 16000u);
+  EXPECT_EQ(AacBytesPerSecond(96000), 12000u);
+  EXPECT_EQ(AacBytesPerSecond(160000), 20000u);
+  EXPECT_EQ(AacBytesPerSecond(192000), 24000u);
+  EXPECT_EQ(AacBytesPerSecond(320000), 24000u);
+  EXPECT_EQ(AacBytesPerSecond(64000), 12000u);
+  EXPECT_EQ(AacBytesPerSecond(144000), 16000u);
+}
+
+TEST(ThumbnailTime, ClampsToTheLastFrame) {
+  EXPECT_EQ(ThumbnailTime(1000, 20000000, 333333), int64_t{10000000});
+  EXPECT_EQ(ThumbnailTime(30000, 20000000, 333333), int64_t{19666667});
+  EXPECT_EQ(ThumbnailTime(-5, 20000000, 333333), int64_t{0});
+  EXPECT_EQ(ThumbnailTime(30000, 0, 333333), int64_t{300000000});
+}
+
 TEST(PendingOutput, KeepsTheExtensionAndCleansUp) {
   TempDirectory directory;
   const auto destination = directory.File(L"clip.mp4");

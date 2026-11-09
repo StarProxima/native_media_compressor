@@ -40,6 +40,7 @@ CompressionReply ToReply(const Outcome& outcome) {
     reply.set_width(outcome.width);
     reply.set_height(outcome.height);
     reply.set_size_bytes(outcome.size_bytes);
+    if (!outcome.video_codec.empty()) reply.set_video_codec(outcome.video_codec);
   }
   if (!outcome.message.empty()) reply.set_message(outcome.message);
   return reply;
@@ -81,6 +82,11 @@ void NativeMediaCompressorPlugin::CompressVideo(
   job.max_frame_rate = Optional(request.max_frame_rate());
   job.max_bytes = Optional(request.max_bytes());
   job.include_audio = request.include_audio();
+  job.prefer_hevc = request.codec() == VideoCodec::kHevc;
+  job.start_ms = Optional(request.start_ms());
+  job.end_ms = Optional(request.end_ms());
+  job.rotate_quarter_turns = request.rotate_quarter_turns();
+  job.audio_bitrate = request.audio_bitrate();
 
   auto cancelled = std::make_shared<std::atomic<bool>>(false);
   {
@@ -156,11 +162,28 @@ void NativeMediaCompressorPlugin::ProbeVideo(
         if (info->bitrate) probe->set_bitrate(*info->bitrate);
         if (info->video_codec) probe->set_video_codec(*info->video_codec);
         if (info->audio_codec) probe->set_audio_codec(*info->audio_codec);
+        if (info->frame_rate) probe->set_frame_rate(*info->frame_rate);
       }
     } catch (...) {
       probe.reset();
     }
     dispatcher_.Post([result, probe] { result(probe); });
+  });
+}
+
+void NativeMediaCompressorPlugin::VideoThumbnail(
+    const ThumbnailRequest& request, std::function<void(ErrorOr<CompressionReply> reply)> result) {
+  ThumbnailJob job;
+  job.source = ToWindowsPath(request.source());
+  job.destination = ToWindowsPath(request.destination());
+  job.position_ms = request.position_ms();
+  job.bounds.max_short_side = Optional(request.max_short_side());
+  job.bounds.max_long_side = Optional(request.max_long_side());
+  job.png = request.format() == ImageFormat::kPng;
+  job.quality = static_cast<int>(std::clamp<int64_t>(request.quality(), 0, 100));
+  media_workers_.Submit([this, job, result] {
+    const CompressionReply reply = ToReply(SaveVideoFrame(job));
+    dispatcher_.Post([result, reply] { result(reply); });
   });
 }
 

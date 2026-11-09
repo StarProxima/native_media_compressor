@@ -6,6 +6,16 @@ import kotlin.math.roundToInt
 
 internal data class Size(val width: Int, val height: Int) {
     fun transposed() = Size(height, width)
+
+    /** The size shown after turning by [degrees], a multiple of 90. */
+    fun rotated(degrees: Int) = if (degrees % 180 != 0) transposed() else this
+}
+
+internal object Rotation {
+    /** [degrees] turned clockwise by [quarterTurns], within 0 until 360. */
+    fun add(degrees: Int, quarterTurns: Long): Int = (((degrees + quarterTurns % 4 * 90) % 360 + 360) % 360).toInt()
+
+    fun normalize(degrees: Int): Int = (degrees % 360 + 360) % 360
 }
 
 internal object Scaling {

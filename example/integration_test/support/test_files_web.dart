@@ -5,6 +5,8 @@ import 'package:web/web.dart' as web;
 
 final _fixtures = <String, String>{};
 
+bool get isIosSimulator => false;
+
 Future<void> setUpFiles() async {}
 
 /// Loads the fixture from the asset bundle into a `blob:` URL.
@@ -19,6 +21,13 @@ Future<String> fixture(String name) async {
 
 /// The web ignores destinations; results point to object URLs instead.
 String outputPath(String name) => 'out-$name';
+
+Future<Uint8List> bytesOf(String location) async {
+  final response = await web.window.fetch(location.toJS).toDart;
+  final buffer = await response.arrayBuffer().toDart;
+
+  return buffer.toDart.asUint8List();
+}
 
 Future<int> sizeOf(String location) async {
   final response = await web.window.fetch(location.toJS).toDart;

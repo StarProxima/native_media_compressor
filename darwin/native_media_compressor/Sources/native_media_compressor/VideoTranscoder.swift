@@ -1,8 +1,10 @@
 import AVFoundation
 import Foundation
+import VideoToolbox
 
-/// Re-encodes a video to H.264 in MP4 through AVAssetReader and AVAssetWriter.
-/// AAC audio is copied without re-encoding.
+/// Re-encodes a video to H.264 or HEVC in MP4 through AVAssetReader and
+/// AVAssetWriter. AAC audio is copied without re-encoding; other audio is
+/// re-encoded to AAC.
 final class VideoTranscoder {
   private static let sizeCheckSamples = 30
   private static let watchdogInterval = DispatchTimeInterval.milliseconds(250)
@@ -16,6 +18,10 @@ final class VideoTranscoder {
   private let queue = DispatchQueue(label: "io.github.starproxima.native_media_compressor.video")
   private var stopReply: CompressionReply?
   private var pumps: [TrackPump] = []
+  // MP3 that AVFoundation hides inside MP4 is read from a copy of its frames,
+  // by a reader of its own.
+  private var readers: [AVAssetReader] = []
+  private var scratchFiles: [URL] = []
   private var writtenSamples = 0
   private var lastFrameSlot = -Double.infinity
   private var reportedPercent = -1
@@ -33,6 +39,9 @@ final class VideoTranscoder {
   /// Blocks the calling thread until the output is finished or abandoned.
   func run() -> CompressionReply {
     if isCancelled() { return .status(.cancelled) }
+    defer {
+      for file in scratchFiles { try? FileManager.default.removeItem(at: file) }
+    }
     return staged.run {
       let box = ReplyBox()
       let done = DispatchSemaphore(value: 0)
@@ -57,14 +66,20 @@ final class VideoTranscoder {
     if video.isHDR, !Self.canToneMap {
       return .status(.unsupported, "HDR to SDR conversion needs iOS 14 or macOS 11")
     }
+    let isTrimmed = request.startMs != nil || request.endMs != nil
+    guard
+      let range = Self.keptRange(
+        startMs: request.startMs, endMs: request.endMs, duration: media.duration)
+    else { return .status(.unsupported, "the trim range keeps nothing") }
     let audioPlan = request.includeAudio ? media.audioPlan : AudioPlan()
-    if audioPlan.hasUncopyable {
-      let codec = audioPlan.uncopyableCodec ?? "of unknown format"
-      return .status(.unsupported, "audio \(codec) has no AAC alternative to copy")
+    if audioPlan.hasUnreadable {
+      let codec = audioPlan.unreadableCodec ?? "of unknown format"
+      return .status(.unsupported, "audio \(codec) cannot be decoded")
     }
-    let audioTracks = audioPlan.tracks
 
     let reader = try AVAssetReader(asset: asset)
+    if isTrimmed { reader.timeRange = range }
+    readers = [reader]
     let writer = try AVAssetWriter(outputURL: output, fileType: .mp4)
 
     // Asking the decoder for 8-bit BT.709 makes VideoToolbox convert the
@@ -89,51 +104,72 @@ final class VideoTranscoder {
       maxShortSide: request.maxShortSide, maxLongSide: request.maxLongSide)
     let width = Self.evenSide(Double(video.naturalSize.width) * scale)
     let height = Self.evenSide(Double(video.naturalSize.height) * scale)
-    let videoInput = AVAssetWriterInput(
-      mediaType: .video,
-      outputSettings: [
-        AVVideoCodecKey: AVVideoCodecType.h264,
-        AVVideoWidthKey: width,
-        AVVideoHeightKey: height,
-        AVVideoScalingModeKey: AVVideoScalingModeResize,
-        AVVideoColorPropertiesKey: Self.bt709,
-        AVVideoCompressionPropertiesKey: [
-          AVVideoAverageBitRateKey: request.videoBitrate,
-          AVVideoExpectedSourceFrameRateKey: frameRate,
-          AVVideoMaxKeyFrameIntervalDurationKey: 2,
-          AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
-        ],
-      ])
-    videoInput.transform = video.transform
+    let frame = CGSize(width: width, height: height)
+    // The turn goes into the track matrix next to the source orientation, so
+    // no pixel has to move.
+    let transform = MediaAsset.orientation(
+      video.transform, turnedBy: Int(request.rotateQuarterTurns), size: frame)
+    let (videoSettings, codec) = Self.videoSettings(
+      width: width, height: height, frameRate: frameRate, request: request, writer: writer)
+    let videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
+    videoInput.transform = transform
     videoInput.expectsMediaDataInRealTime = false
-    guard writer.canAdd(videoInput) else { return .status(.unsupported, "cannot encode H.264") }
+    guard writer.canAdd(videoInput) else { return .status(.unsupported, "cannot encode video") }
     writer.add(videoInput)
 
     // Screen recordings with a microphone keep system sound and voice in
-    // separate tracks that play together, so every played group is copied.
+    // separate tracks that play together, so every played group is kept.
     var audioPumps: [TrackPump] = []
-    for track in audioTracks {
-      let output = AVAssetReaderTrackOutput(track: track.track, outputSettings: nil)
-      let input = AVAssetWriterInput(
-        mediaType: .audio, outputSettings: nil, sourceFormatHint: track.format)
-      input.expectsMediaDataInRealTime = false
-      guard reader.canAdd(output), writer.canAdd(input) else {
-        return .status(.unsupported, "cannot copy audio track")
+    for source in audioPlan.sources {
+      let output: AVAssetReaderTrackOutput
+      let input: AVAssetWriterInput
+      switch source {
+      case .copy(let track):
+        output = AVAssetReaderTrackOutput(track: track.track, outputSettings: nil)
+        input = AVAssetWriterInput(
+          mediaType: .audio, outputSettings: nil, sourceFormatHint: track.format)
+        guard reader.canAdd(output) else { return .status(.unsupported, "cannot copy audio track") }
+        reader.add(output)
+      case .encode(let track):
+        guard let pair = Self.encoder(for: track, reader: reader, writer: writer, request: request)
+        else { return .status(.unsupported, "cannot re-encode audio \(track.codec ?? "")") }
+        (output, input) = pair
+      case .encodeHidden(let track):
+        let file = FileManager.default.temporaryDirectory
+          .appendingPathComponent(".nmc-\(UUID().uuidString).mp3")
+        scratchFiles.append(file)
+        let hidden = AVURLAsset(url: file)
+        guard ContainerAudio.copySamples(ofTrack: track.id, from: asset.url, to: file),
+          let decoded = try? await MediaAsset.load(hidden).audio.first
+        else { return .status(.unsupported, "cannot decode audio \(track.codec ?? "")") }
+        let hiddenReader = try AVAssetReader(asset: hidden)
+        if isTrimmed { hiddenReader.timeRange = range }
+        guard
+          let pair = Self.encoder(
+            for: decoded, reader: hiddenReader, writer: writer, request: request)
+        else { return .status(.unsupported, "cannot re-encode audio \(track.codec ?? "")") }
+        readers.append(hiddenReader)
+        (output, input) = pair
       }
-      reader.add(output)
+      input.expectsMediaDataInRealTime = false
+      guard writer.canAdd(input) else { return .status(.unsupported, "cannot write audio track") }
       writer.add(input)
       audioPumps.append(TrackPump(output: output, input: input))
     }
 
-    guard reader.startReading(), writer.startWriting() else {
-      let error = reader.error ?? writer.error
-      reader.cancelReading()
+    guard readers.allSatisfy({ $0.startReading() }), writer.startWriting() else {
+      let error = readers.lazy.compactMap(\.error).first ?? writer.error
+      for reader in readers { reader.cancelReading() }
       writer.cancelWriting()
       return Self.failure(error)
     }
-    writer.startSession(atSourceTime: .zero)
+    // Starting the session at the trim start puts that instant at 0 in the
+    // output; the edit list the writer adds hides whatever part of the first
+    // frame and audio packet lies before it.
+    writer.startSession(atSourceTime: isTrimmed ? range.start : .zero)
 
-    let duration = media.duration.seconds
+    let start = isTrimmed ? range.start.seconds : 0
+    let duration = isTrimmed ? range.duration.seconds : media.duration.seconds
     let videoPump = TrackPump(output: videoOutput, input: videoInput)
     await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
       let group = DispatchGroup()
@@ -146,10 +182,10 @@ final class VideoTranscoder {
       watchdog.setEventHandler { [self] in
         if stopReply == nil, isCancelled() { stopReply = .status(.cancelled) }
         if stopReply == nil, writer.status == .failed { stopReply = Self.failure(writer.error) }
-        if stopReply != nil { stopAll(reader: reader) }
+        if stopReply != nil { stopAll() }
       }
       watchdog.resume()
-      run(videoPump, reader: reader, writer: writer) { [self] sample in
+      run(videoPump, writer: writer) { [self] sample in
         guard let maxRate else { return true }
         // One frame per slot of a fixed grid at the target rate. Measuring
         // from the last kept frame instead would keep only every second frame
@@ -163,10 +199,11 @@ final class VideoTranscoder {
         lastFrameSlot = slot
         return true
       } onAppended: { [self] sample in
-        reportProgress(at: CMSampleBufferGetPresentationTimeStamp(sample).seconds, duration: duration)
+        let time = CMSampleBufferGetPresentationTimeStamp(sample).seconds
+        reportProgress(at: time - start, duration: duration)
       }
       for pump in audioPumps {
-        run(pump, reader: reader, writer: writer, shouldAppend: { _ in true }, onAppended: { _ in })
+        run(pump, writer: writer, shouldAppend: { _ in true }, onAppended: { _ in })
       }
       group.notify(queue: queue) {
         watchdog.cancel()
@@ -180,11 +217,14 @@ final class VideoTranscoder {
     }
     // On iOS a backgrounded app loses the hardware codec and reading or
     // writing ends with an error.
-    guard reader.status == .completed else {
-      let error = reader.error ?? writer.error
+    if let failed = readers.first(where: { $0.status != .completed }) {
+      let error = failed.error ?? writer.error
       writer.cancelWriting()
       return Self.failure(error)
     }
+    // A reader limited to a range still hands over the whole frame or packet
+    // that crosses its end.
+    if isTrimmed, range.end.isNumeric { writer.endSession(atSourceTime: range.end) }
     await writer.finishWriting()
     guard writer.status == .completed else { return Self.failure(writer.error) }
 
@@ -196,17 +236,104 @@ final class VideoTranscoder {
         onProgress(1)
       }
     }
-    let output = MediaAsset.displaySize(CGSize(width: width, height: height), video.transform)
+    let output = MediaAsset.displaySize(frame, transform)
     return CompressionReply(
       status: .compressed,
       width: Int64(output.width.rounded()),
       height: Int64(output.height.rounded()),
-      sizeBytes: size)
+      sizeBytes: size,
+      videoCodec: codec)
+  }
+
+  /// The part of a `duration` long timeline between `startMs` and `endMs`.
+  /// An end past the timeline keeps to its end; nil means nothing is kept.
+  static func keptRange(startMs: Int64?, endMs: Int64?, duration: CMTime) -> CMTimeRange? {
+    let start = CMTime(value: max(0, startMs ?? 0), timescale: 1000)
+    var end = duration.isNumeric ? duration : .positiveInfinity
+    if let endMs { end = CMTimeMinimum(end, CMTime(value: endMs, timescale: 1000)) }
+    guard end > start else { return nil }
+    return CMTimeRange(start: start, end: end)
+  }
+
+  /// Writer settings for the requested codec and the MIME type of the codec
+  /// they select. HEVC falls back to H.264 where the system cannot encode it.
+  private static func videoSettings(
+    width: Int, height: Int, frameRate: Double, request: VideoRequest, writer: AVAssetWriter
+  ) -> ([String: Any], String) {
+    func settings(_ codec: AVVideoCodecType, profile: String, limitsRate: Bool) -> [String: Any] {
+      var compression: [String: Any] = [
+        AVVideoAverageBitRateKey: request.videoBitrate,
+        AVVideoExpectedSourceFrameRateKey: frameRate,
+        AVVideoMaxKeyFrameIntervalKey: max(1, Int((frameRate * 2).rounded())),
+        AVVideoMaxKeyFrameIntervalDurationKey: 2,
+        AVVideoProfileLevelKey: profile,
+      ]
+      // The average alone is a loose target that encoders may overshoot on
+      // hard scenes; a cap of 1.5x over any second bounds that.
+      if limitsRate {
+        compression[kVTCompressionPropertyKey_DataRateLimits as String] =
+          dataRateLimits(bitrate: request.videoBitrate)
+      }
+      return [
+        AVVideoCodecKey: codec,
+        AVVideoWidthKey: width,
+        AVVideoHeightKey: height,
+        AVVideoScalingModeKey: AVVideoScalingModeResize,
+        AVVideoColorPropertiesKey: bt709,
+        AVVideoCompressionPropertiesKey: compression,
+      ]
+    }
+    func firstApplicable(_ codec: AVVideoCodecType, profile: String) -> [String: Any]? {
+      [true, false].lazy.map { settings(codec, profile: profile, limitsRate: $0) }
+        .first { writer.canApply(outputSettings: $0, forMediaType: .video) }
+    }
+    // AVAssetWriter tags HEVC in MP4 as hvc1, the entry Apple players need.
+    if request.codec == .hevc, hasHEVCEncoder,
+      let hevc = firstApplicable(.hevc, profile: kVTProfileLevel_HEVC_Main_AutoLevel as String)
+    {
+      return (hevc, "video/hevc")
+    }
+    #if targetEnvironment(simulator)
+      // The simulator's software H.264 encoder ignores the bitrate in the
+      // Main and High profiles and writes several times the target; in
+      // Baseline it follows it.
+      let profile = AVVideoProfileLevelH264BaselineAutoLevel
+    #else
+      let profile = AVVideoProfileLevelH264HighAutoLevel
+    #endif
+    return (
+      firstApplicable(.h264, profile: profile)
+        ?? settings(.h264, profile: profile, limitsRate: false),
+      "video/avc"
+    )
+  }
+
+  /// `kVTCompressionPropertyKey_DataRateLimits`: at most 1.5 times the
+  /// average bitrate, in bytes, over any one second.
+  static func dataRateLimits(bitrate: Int64) -> [Double] {
+    [Double(bitrate) / 8 * 1.5, 1]
+  }
+
+  /// Reader output that decodes `track` and writer input that encodes it to
+  /// AAC, or nil when this system has no AAC encoder for it.
+  private static func encoder(
+    for track: MediaAsset.AudioTrack, reader: AVAssetReader, writer: AVAssetWriter,
+    request: VideoRequest
+  ) -> (AVAssetReaderTrackOutput, AVAssetWriterInput)? {
+    let settings = AudioEncoding.settings(for: track.format, bitrate: request.audioBitrate)
+    // An input made from settings the writer rejects raises an Objective-C
+    // exception, which Swift cannot catch.
+    guard writer.canApply(outputSettings: settings.encoded, forMediaType: .audio) else {
+      return nil
+    }
+    let output = AVAssetReaderTrackOutput(track: track.track, outputSettings: settings.decoded)
+    guard reader.canAdd(output) else { return nil }
+    reader.add(output)
+    return (output, AVAssetWriterInput(mediaType: .audio, outputSettings: settings.encoded))
   }
 
   private func run(
     _ pump: TrackPump,
-    reader: AVAssetReader,
     writer: AVAssetWriter,
     shouldAppend: @escaping (CMSampleBuffer) -> Bool,
     onAppended: @escaping (CMSampleBuffer) -> Void
@@ -215,7 +342,7 @@ final class VideoTranscoder {
       while pump.input.isReadyForMoreMediaData, !pump.isFinished {
         if stopReply == nil, isCancelled() { stopReply = .status(.cancelled) }
         if stopReply != nil {
-          stopAll(reader: reader)
+          stopAll()
           return
         }
         guard let sample = pump.output.copyNextSampleBuffer() else {
@@ -225,7 +352,7 @@ final class VideoTranscoder {
         guard shouldAppend(sample) else { continue }
         guard pump.input.append(sample) else {
           stopReply = Self.failure(writer.error)
-          stopAll(reader: reader)
+          stopAll()
           return
         }
         onAppended(sample)
@@ -234,15 +361,15 @@ final class VideoTranscoder {
           output.fileSize > maxBytes
         {
           stopReply = .status(.tooLarge)
-          stopAll(reader: reader)
+          stopAll()
           return
         }
       }
     }
   }
 
-  private func stopAll(reader: AVAssetReader) {
-    reader.cancelReading()
+  private func stopAll() {
+    for reader in readers { reader.cancelReading() }
     for pump in pumps { pump.finish() }
   }
 
@@ -292,6 +419,19 @@ final class VideoTranscoder {
     AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2,
   ]
 
+  /// Devices without an HEVC encoder, such as iPhones before the A10, leave
+  /// it out of this list.
+  private static let hasHEVCEncoder: Bool = {
+    var list: CFArray?
+    guard VTCopyVideoEncoderList(nil, &list) == noErr,
+      let encoders = list as? [[String: Any]]
+    else { return false }
+    return encoders.contains {
+      ($0[kVTVideoEncoderList_CodecType as String] as? NSNumber)?.uint32Value
+        == kCMVideoCodecType_HEVC
+    }
+  }()
+
   /// VideoToolbox tone-maps PQ and HLG to SDR from iOS 14 and macOS 11 on.
   private static var canToneMap: Bool {
     if #available(iOS 14, macOS 11, *) { return true }
@@ -311,7 +451,7 @@ private final class ReplyBox {
   var reply = CompressionReply.status(.failed)
 }
 
-/// Moves one track from the reader to the writer. Touched only on the
+/// Moves one track from a reader to the writer. Touched only on the
 /// transcoder queue.
 private final class TrackPump {
   let output: AVAssetReaderTrackOutput

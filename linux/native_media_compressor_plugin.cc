@@ -79,12 +79,14 @@ std::optional<int64_t> Optional(const int64_t* value) {
 NmcCompressionReply* ToReply(const nmc::Outcome& outcome) {
   const char* message = outcome.message.empty() ? nullptr : outcome.message.c_str();
   if (outcome.status != NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_COMPRESSED) {
-    return nmc_compression_reply_new(outcome.status, nullptr, nullptr, nullptr, message);
+    return nmc_compression_reply_new(outcome.status, nullptr, nullptr, nullptr, message, nullptr);
   }
   int64_t width = outcome.width;
   int64_t height = outcome.height;
   int64_t size_bytes = outcome.size_bytes;
-  return nmc_compression_reply_new(outcome.status, &width, &height, &size_bytes, message);
+  const char* video_codec = outcome.video_codec.empty() ? nullptr : outcome.video_codec.c_str();
+  return nmc_compression_reply_new(outcome.status, &width, &height, &size_bytes, message,
+                                   video_codec);
 }
 
 void OnProgressSent(GObject* source, GAsyncResult* result, gpointer) {
@@ -108,6 +110,11 @@ void HandleCompressVideo(int64_t task_id, NmcVideoRequest* request,
   task->job.max_frame_rate = Optional(nmc_video_request_get_max_frame_rate(request));
   task->job.max_bytes = Optional(nmc_video_request_get_max_bytes(request));
   task->job.include_audio = nmc_video_request_get_include_audio(request);
+  task->job.hevc = nmc_video_request_get_codec(request) == NATIVE_MEDIA_COMPRESSOR_VIDEO_CODEC_HEVC;
+  task->job.start_ms = Optional(nmc_video_request_get_start_ms(request));
+  task->job.end_ms = Optional(nmc_video_request_get_end_ms(request));
+  task->job.rotate_quarter_turns = nmc_video_request_get_rotate_quarter_turns(request);
+  task->job.audio_bitrate = nmc_video_request_get_audio_bitrate(request);
 
   auto api = Retain(self->flutter_api);
   task->on_progress = [api, task_id](double progress) {
@@ -174,12 +181,34 @@ void HandleProbeVideo(const gchar* source,
       g_autoptr(NmcVideoProbe) probe = nullptr;
       if (info) {
         int64_t bitrate = info->bitrate.value_or(0);
+        double frame_rate = info->frame_rate.value_or(0);
         probe = nmc_video_probe_new(info->width, info->height, info->rotation_degrees,
                                     info->duration_ms, info->bitrate ? &bitrate : nullptr,
                                     info->video_codec.c_str(), info->is_hdr, info->has_audio,
-                                    info->has_audio ? info->audio_codec.c_str() : nullptr);
+                                    info->has_audio ? info->audio_codec.c_str() : nullptr,
+                                    info->frame_rate ? &frame_rate : nullptr);
       }
       nmc_media_compressor_host_api_respond_probe_video(response.get(), probe);
+    });
+  });
+}
+
+void HandleVideoThumbnail(NmcThumbnailRequest* request,
+                          NmcMediaCompressorHostApiResponseHandle* response_handle, gpointer) {
+  nmc::ThumbnailJob job;
+  job.source = nmc_thumbnail_request_get_source(request);
+  job.destination = nmc_thumbnail_request_get_destination(request);
+  job.position_ms = nmc_thumbnail_request_get_position_ms(request);
+  job.bounds.max_short_side = Optional(nmc_thumbnail_request_get_max_short_side(request));
+  job.bounds.max_long_side = Optional(nmc_thumbnail_request_get_max_long_side(request));
+  job.format = nmc_thumbnail_request_get_format(request);
+  job.quality = nmc_thumbnail_request_get_quality(request);
+  auto response = Retain(response_handle);
+  RunInBackground([job, response] {
+    const nmc::Outcome outcome = nmc::VideoThumbnail(job);
+    PostToMain([response, outcome] {
+      g_autoptr(NmcCompressionReply) reply = ToReply(outcome);
+      nmc_media_compressor_host_api_respond_video_thumbnail(response.get(), reply);
     });
   });
 }
@@ -187,7 +216,7 @@ void HandleProbeVideo(const gchar* source,
 // The generated channel code is C: exceptions must not unwind into it.
 NmcCompressionReply* FailureReply(const std::exception& error) {
   return nmc_compression_reply_new(NATIVE_MEDIA_COMPRESSOR_COMPRESSION_STATUS_FAILED, nullptr,
-                                   nullptr, nullptr, error.what());
+                                   nullptr, nullptr, error.what(), nullptr);
 }
 
 void GuardedCompressVideo(int64_t task_id, NmcVideoRequest* request,
@@ -240,9 +269,20 @@ void GuardedProbeVideo(const gchar* source,
   }
 }
 
+void GuardedVideoThumbnail(NmcThumbnailRequest* request,
+                           NmcMediaCompressorHostApiResponseHandle* response_handle,
+                           gpointer user_data) {
+  try {
+    HandleVideoThumbnail(request, response_handle, user_data);
+  } catch (const std::exception& error) {
+    g_autoptr(NmcCompressionReply) reply = FailureReply(error);
+    nmc_media_compressor_host_api_respond_video_thumbnail(response_handle, reply);
+  }
+}
+
 const NmcMediaCompressorHostApiVTable kHostApi = {
-    GuardedCompressVideo, GuardedCompressImage, GuardedCancel, GuardedProbeImage,
-    GuardedProbeVideo,
+    GuardedCompressVideo, GuardedCompressImage, GuardedCancel,
+    GuardedProbeImage,    GuardedProbeVideo,    GuardedVideoThumbnail,
 };
 
 }  // namespace

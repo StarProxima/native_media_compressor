@@ -32,7 +32,15 @@ class _FakeHost {
   }
 
   final calls = <(String, List<Object?>)>[];
-  final handlers = <String, Future<List<Object?>> Function(List<Object?>)>{};
+  final handlers = <String, Future<List<Object?>> Function(List<Object?>)>{
+    'probeVideo': (_) async => [null],
+  };
+
+  /// Arguments of the calls to [method], in order.
+  List<List<Object?>> callsOf(String method) => [
+    for (final (name, args) in calls)
+      if (name == method) args,
+  ];
 
   TestDefaultBinaryMessenger get _messenger =>
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
@@ -82,7 +90,8 @@ void main() {
     expect(result.status, CompressionStatus.compressed);
     expect(result.path, '/out.mp4');
     expect((result.width, result.height, result.sizeBytes), (720, 1280, 1000));
-    final request = host.calls.single.$2[1]! as pigeon.VideoRequest;
+    final request =
+        host.callsOf('compressVideo').single[1]! as pigeon.VideoRequest;
     expect(request.source, '/in.mov');
     expect(request.maxShortSide, 720);
     expect(request.maxBytes, 5000);
@@ -120,8 +129,8 @@ void main() {
     final firstValues = first.progress.toList();
     final secondValues = second.progress.toList();
     await pumpEventQueue();
-    final firstId = host.calls[0].$2[0]! as int;
-    final secondId = host.calls[1].$2[0]! as int;
+    final firstId = host.callsOf('compressVideo')[0][0]! as int;
+    final secondId = host.callsOf('compressVideo')[1][0]! as int;
 
     await host.sendProgress(firstId, 0.25);
     await host.sendProgress(secondId, 1.5);
@@ -150,7 +159,11 @@ void main() {
     expect((await task.result).status, CompressionStatus.cancelled);
     await task.cancel();
 
-    expect(host.calls.map((call) => call.$1), ['compressVideo', 'cancel']);
+    expect(host.calls.map((call) => call.$1), [
+      'probeVideo',
+      'compressVideo',
+      'cancel',
+    ]);
   });
 
   test('a host error becomes failed instead of throwing', () async {

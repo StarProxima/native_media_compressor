@@ -41,10 +41,21 @@ enum ImageCodec {
       kCGImageSourceThumbnailMaxPixelSize: max(width, height),
       kCGImageSourceShouldCacheImmediately: true,
     ]
-    guard var image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+    guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
       return .status(.failed, "cannot decode image")
     }
-    let isJpeg = request.format == .jpeg
+    return write(
+      image, width: width, height: height, format: request.format, quality: request.quality,
+      to: output)
+  }
+
+  /// Encodes `image` at exactly `width` x `height` into `output`, redrawing
+  /// it when the size differs or JPEG needs the alpha flattened.
+  static func write(
+    _ image: CGImage, width: Int, height: Int, format: ImageFormat, quality: Int64, to output: URL
+  ) -> CompressionReply {
+    var image = image
+    let isJpeg = format == .jpeg
     let flatten = isJpeg && hasAlpha(image)
     if image.width != width || image.height != height || flatten {
       guard let redrawn = redraw(image, width: width, height: height, opaque: flatten) else {
@@ -60,7 +71,7 @@ enum ImageCodec {
     var properties: [CFString: Any] = [:]
     if isJpeg {
       properties[kCGImageDestinationLossyCompressionQuality] =
-        Double(min(100, max(0, request.quality))) / 100
+        Double(min(100, max(0, quality))) / 100
     }
     CGImageDestinationAddImage(encoder, image, properties as CFDictionary)
     guard CGImageDestinationFinalize(encoder) else { return .status(.failed, "cannot encode image") }

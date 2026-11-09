@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "media_common.h"
 
@@ -33,6 +34,12 @@ Outcome CompressImageFile(const ImageJob& job);
 // Reads the size, orientation and frame count from the headers. Null when no
 // installed WIC decoder can read the file.
 std::optional<ImageInfo> ProbeImageFile(const std::wstring& source);
+
+// Scales opaque, upright BGRA pixels down to fit `job.bounds` and writes them
+// to `output` as JPEG or PNG; the job's source and destination are not used.
+// COM must be initialized on the calling thread.
+Outcome WriteFrameImage(const std::vector<uint8_t>& bgra, uint32_t width, uint32_t height,
+                        const ImageJob& job, const std::wstring& output);
 
 }  // namespace native_media_compressor
 

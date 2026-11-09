@@ -4,6 +4,7 @@ import 'package:flutter_web_plugins/flutter_web_plugins.dart';
 
 import 'native_media_compressor.dart';
 import 'src/web/web_image.dart';
+import 'src/web/web_thumbnail.dart';
 import 'src/web/web_video.dart';
 
 /// Web implementation of `native_media_compressor`, on WebCodecs for video
@@ -74,4 +75,21 @@ class NativeMediaCompressorWeb extends NativeMediaCompressorPlatform {
   @override
   Future<VideoMetadata?> probeVideo(String source) =>
       WebVideoProbe.probe(source);
+
+  @override
+  Future<CompressionResult> videoThumbnail({
+    required String source,
+    required String destination,
+    required Duration position,
+    required ImageOptions options,
+  }) async {
+    try {
+      return await WebVideoThumbnail.capture(source, position, options);
+    } on Object catch (error) {
+      return CompressionResult(
+        status: CompressionStatus.failed,
+        message: '$error',
+      );
+    }
+  }
 }

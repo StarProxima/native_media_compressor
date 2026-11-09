@@ -131,7 +131,7 @@ void main() {
             width: video.width,
             height: video.height,
             timescale: video.timescale,
-            avcC: video.codecConfig!,
+            config: video.codecConfig!,
             rotation: 90,
           );
       for (final sample in video.samples) {
@@ -196,7 +196,7 @@ void main() {
             width: 64,
             height: 48,
             timescale: 30,
-            avcC: config,
+            config: config,
             rotation: 0,
           );
       for (var i = 0; i < 10; i++) {

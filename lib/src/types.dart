@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 /// How a compression ended.
 ///
@@ -25,6 +26,21 @@ enum CompressionStatus {
 
   /// The input could not be read or a codec failed midway.
   failed,
+
+  /// The output was not smaller than the source by `minSavingsPercent`, so
+  /// it was dropped and the source is the better file to keep.
+  skipped,
+}
+
+/// Codec of the output video track, for [VideoOptions.codec].
+enum VideoCodec {
+  /// H.264: plays everywhere, the default.
+  h264,
+
+  /// HEVC (H.265): about a third smaller at the same quality, but not every
+  /// player or browser decodes it. Where the platform has no HEVC encoder the
+  /// output is H.264; [CompressionResult.videoCodec] tells which one it got.
+  hevc,
 }
 
 /// Output format for [ImageOptions.format].
@@ -39,26 +55,69 @@ enum ImageFormat {
 /// Video compression settings.
 ///
 /// The frame is only ever scaled down, keeping its aspect ratio, until it fits
-/// both [maxShortSide] and [maxLongSide]. The output is SDR H.264 video in an
-/// MP4 container. HDR input (HLG, PQ, Dolby Vision) is tone-mapped to SDR on
-/// Android 7+ with a decoder for the source profile, iOS 14+ and macOS 11+,
-/// and by the browser on the web where it decodes the source; elsewhere it is
-/// [CompressionStatus.unsupported]. AAC audio is copied without
-/// re-encoding.
+/// both [maxShortSide] and [maxLongSide]. The output is SDR video in an MP4
+/// container, H.264 unless [codec] asks for HEVC. HDR input (HLG, PQ, Dolby
+/// Vision) is tone-mapped to SDR on Android 7+ with a decoder for the source
+/// profile, iOS 14+ and macOS 11+, and by the browser on the web where it
+/// decodes the source; elsewhere it is [CompressionStatus.unsupported]. AAC
+/// audio is copied without re-encoding; other audio is re-encoded to AAC at
+/// [audioBitrate] where the platform has an AAC encoder.
+///
+/// The video bitrate comes from the first of [targetBytes], [videoBitrate]
+/// and [qualityPercent] that is set, and otherwise from [bitsPerPixel]. It
+/// stays below the bitrate of the source video. Encoders may still overshoot
+/// it on short clips; [minSavingsPercent] guarantees a smaller output.
+///
+/// [light], [balanced] and [strong] are ready settings for the usual cases.
 final class VideoOptions {
   /// Creates video compression settings.
   const VideoOptions({
     this.maxShortSide = 720,
     this.maxLongSide,
-    this.videoBitrate = 2500000,
+    this.videoBitrate,
+    this.qualityPercent,
+    this.targetBytes,
+    this.bitsPerPixel = 0.07,
     this.maxFrameRate = 30,
     this.maxBytes,
+    this.minSavingsPercent,
     this.includeAudio = true,
+    this.audioBitrate = 128000,
+    this.codec = VideoCodec.h264,
+    this.trimStart,
+    this.trimEnd,
+    this.rotateQuarterTurns = 0,
   }) : assert(maxShortSide == null || maxShortSide > 0),
+       assert(audioBitrate > 0),
+       assert(rotateQuarterTurns >= 0 && rotateQuarterTurns < 4),
        assert(maxLongSide == null || maxLongSide > 0),
-       assert(videoBitrate > 0),
+       assert(videoBitrate == null || videoBitrate > 0),
+       assert(
+         qualityPercent == null ||
+             (qualityPercent > 0 && qualityPercent <= 100),
+       ),
+       assert(targetBytes == null || targetBytes > 0),
+       assert(bitsPerPixel > 0),
        assert(maxFrameRate == null || maxFrameRate > 0),
-       assert(maxBytes == null || maxBytes > 0);
+       assert(maxBytes == null || maxBytes > 0),
+       assert(
+         minSavingsPercent == null ||
+             (minSavingsPercent >= 0 && minSavingsPercent < 100),
+       );
+
+  /// Near the source quality: up to 1080p at 60 frames per second.
+  static const light = VideoOptions(
+    maxShortSide: 1080,
+    maxFrameRate: 60,
+    bitsPerPixel: 0.1,
+  );
+
+  /// The default: up to 720p at 30 frames per second.
+  static const balanced = VideoOptions();
+
+  /// The smallest files that stay watchable: up to 480p at 30 frames per
+  /// second.
+  static const strong = VideoOptions(maxShortSide: 480, bitsPerPixel: 0.05);
 
   /// Upper bound for the shorter side of the frame, in pixels.
   final int? maxShortSide;
@@ -66,8 +125,24 @@ final class VideoOptions {
   /// Upper bound for the longer side of the frame, in pixels.
   final int? maxLongSide;
 
-  /// Target video bitrate, in bits per second.
-  final int videoBitrate;
+  /// Video bitrate, in bits per second. When null, the bitrate is derived
+  /// from the other settings.
+  final int? videoBitrate;
+
+  /// Video bitrate as a percentage of the source video bitrate, from 1 to
+  /// 100.
+  final int? qualityPercent;
+
+  /// Desired output size in bytes. The video bitrate is derived from the
+  /// duration so that video and copied audio add up to about this size;
+  /// encoders land within a few percent, so set [maxBytes] as well when the
+  /// size is a hard limit.
+  final int? targetBytes;
+
+  /// Bits of video per pixel per frame for the automatic bitrate: 0.07 keeps
+  /// screen text and faces sharp, 0.05 is visibly softer, 0.1 is close to the
+  /// source.
+  final double bitsPerPixel;
 
   /// Frames above this rate are dropped where the platform supports it.
   /// Values above 240 are treated as 240.
@@ -77,9 +152,65 @@ final class VideoOptions {
   /// exceeds this many bytes.
   final int? maxBytes;
 
-  /// Whether to keep the audio tracks. Inputs with non-AAC audio are
-  /// [CompressionStatus.unsupported] unless this is false.
+  /// When set, an output that is not at least this many percent smaller
+  /// than the source is dropped with [CompressionStatus.skipped]; 0 drops
+  /// only outputs that are not smaller at all.
+  final int? minSavingsPercent;
+
+  /// Whether to keep the audio tracks.
   final bool includeAudio;
+
+  /// Bitrate for audio that is not AAC and so has to be re-encoded, in bits
+  /// per second. AAC audio is copied and keeps its own bitrate.
+  final int audioBitrate;
+
+  /// Codec of the output video track.
+  final VideoCodec codec;
+
+  /// Start of the part to keep; null keeps from the beginning.
+  final Duration? trimStart;
+
+  /// End of the part to keep; null keeps to the end.
+  final Duration? trimEnd;
+
+  /// Clockwise quarter turns added to the displayed orientation, 0 to 3.
+  final int rotateQuarterTurns;
+
+  /// A copy with the given fields replaced. Nullable fields cannot be cleared
+  /// this way; create new options for that.
+  VideoOptions copyWith({
+    int? maxShortSide,
+    int? maxLongSide,
+    int? videoBitrate,
+    int? qualityPercent,
+    int? targetBytes,
+    double? bitsPerPixel,
+    int? maxFrameRate,
+    int? maxBytes,
+    int? minSavingsPercent,
+    bool? includeAudio,
+    int? audioBitrate,
+    VideoCodec? codec,
+    Duration? trimStart,
+    Duration? trimEnd,
+    int? rotateQuarterTurns,
+  }) => VideoOptions(
+    maxShortSide: maxShortSide ?? this.maxShortSide,
+    maxLongSide: maxLongSide ?? this.maxLongSide,
+    videoBitrate: videoBitrate ?? this.videoBitrate,
+    qualityPercent: qualityPercent ?? this.qualityPercent,
+    targetBytes: targetBytes ?? this.targetBytes,
+    bitsPerPixel: bitsPerPixel ?? this.bitsPerPixel,
+    maxFrameRate: maxFrameRate ?? this.maxFrameRate,
+    maxBytes: maxBytes ?? this.maxBytes,
+    minSavingsPercent: minSavingsPercent ?? this.minSavingsPercent,
+    includeAudio: includeAudio ?? this.includeAudio,
+    audioBitrate: audioBitrate ?? this.audioBitrate,
+    codec: codec ?? this.codec,
+    trimStart: trimStart ?? this.trimStart,
+    trimEnd: trimEnd ?? this.trimEnd,
+    rotateQuarterTurns: rotateQuarterTurns ?? this.rotateQuarterTurns,
+  );
 }
 
 /// Image compression settings.
@@ -88,6 +219,8 @@ final class VideoOptions {
 /// both [maxShortSide] and [maxLongSide]. EXIF orientation is applied to the
 /// pixels, and metadata is not copied. Animated images keep only the first
 /// frame.
+///
+/// [light], [balanced] and [strong] are ready settings for the usual cases.
 final class ImageOptions {
   /// Creates image compression settings.
   const ImageOptions({
@@ -95,7 +228,24 @@ final class ImageOptions {
     this.maxLongSide = 2048,
     this.format = ImageFormat.jpeg,
     this.quality = 85,
-  }) : assert(quality >= 0 && quality <= 100);
+    this.targetBytes,
+    this.minSavingsPercent,
+  }) : assert(quality >= 0 && quality <= 100),
+       assert(targetBytes == null || targetBytes > 0),
+       assert(
+         minSavingsPercent == null ||
+             (minSavingsPercent >= 0 && minSavingsPercent < 100),
+       );
+
+  /// Near the source quality: long side up to 2560, JPEG quality 90.
+  static const light = ImageOptions(maxLongSide: 2560, quality: 90);
+
+  /// The default: long side up to 2048, JPEG quality 85.
+  static const balanced = ImageOptions();
+
+  /// Small files for previews and chats: long side up to 1280, JPEG quality
+  /// 75.
+  static const strong = ImageOptions(maxLongSide: 1280, quality: 75);
 
   /// Upper bound for the shorter side, in pixels.
   final int? maxShortSide;
@@ -108,6 +258,34 @@ final class ImageOptions {
 
   /// Encoder quality from 0 to 100 for lossy formats.
   final int quality;
+
+  /// Desired output size in bytes. JPEG quality goes down from [quality],
+  /// then the image shrinks, until the output fits; if nothing fits, the
+  /// smallest attempt is the result.
+  final int? targetBytes;
+
+  /// When set, an output that is not at least this many percent smaller
+  /// than the source is dropped with [CompressionStatus.skipped]; 0 drops
+  /// only outputs that are not smaller at all.
+  final int? minSavingsPercent;
+
+  /// A copy with the given fields replaced. Nullable fields cannot be cleared
+  /// this way; create new options for that.
+  ImageOptions copyWith({
+    int? maxShortSide,
+    int? maxLongSide,
+    ImageFormat? format,
+    int? quality,
+    int? targetBytes,
+    int? minSavingsPercent,
+  }) => ImageOptions(
+    maxShortSide: maxShortSide ?? this.maxShortSide,
+    maxLongSide: maxLongSide ?? this.maxLongSide,
+    format: format ?? this.format,
+    quality: quality ?? this.quality,
+    targetBytes: targetBytes ?? this.targetBytes,
+    minSavingsPercent: minSavingsPercent ?? this.minSavingsPercent,
+  );
 }
 
 /// Result of a compression.
@@ -120,6 +298,7 @@ final class CompressionResult {
     this.height,
     this.sizeBytes,
     this.message,
+    this.videoCodec,
   });
 
   /// How the compression ended.
@@ -141,6 +320,10 @@ final class CompressionResult {
   /// Platform details about a failure, for logs.
   final String? message;
 
+  /// Codec of the written video track as a MIME type, `video/avc` or
+  /// `video/hevc`; null for images.
+  final String? videoCodec;
+
   /// Whether the output was written.
   bool get isCompressed => status == CompressionStatus.compressed;
 
@@ -148,6 +331,61 @@ final class CompressionResult {
   String toString() =>
       'CompressionResult($status, path: $path, ${width}x$height, '
       'sizeBytes: $sizeBytes${message == null ? '' : ', message: $message'})';
+}
+
+/// What [VideoOptions] would produce for a source, computed from its
+/// headers without encoding anything.
+final class VideoEstimate {
+  /// Creates a video estimate.
+  const VideoEstimate({
+    required this.width,
+    required this.height,
+    required this.videoBitrate,
+    required this.sizeBytes,
+  });
+
+  /// Output width in pixels, as displayed.
+  final int width;
+
+  /// Output height in pixels, as displayed.
+  final int height;
+
+  /// Video bitrate the encoder would get, in bits per second.
+  final int videoBitrate;
+
+  /// Expected output size in bytes; encoders usually land within 10% of it.
+  final int sizeBytes;
+}
+
+/// Result of compressing an image held in memory.
+final class ImageBytesResult {
+  /// Creates an image bytes result.
+  const ImageBytesResult({
+    required this.status,
+    this.bytes,
+    this.width,
+    this.height,
+    this.message,
+  });
+
+  /// How the compression ended.
+  final CompressionStatus status;
+
+  /// The compressed image; set only when [status] is
+  /// [CompressionStatus.compressed].
+  final Uint8List? bytes;
+
+  /// Output width in pixels.
+  final int? width;
+
+  /// Output height in pixels.
+  final int? height;
+
+  /// Platform details about a failure, for logs.
+  final String? message;
+
+  /// Whether the image was compressed.
+  bool get isCompressed => status == CompressionStatus.compressed;
 }
 
 /// Image parameters read from the file header without decoding the pixels.
@@ -189,6 +427,7 @@ final class VideoMetadata {
     this.bitrate,
     this.videoCodec,
     this.audioCodec,
+    this.frameRate,
   });
 
   /// Width in pixels as displayed, after rotation.
@@ -219,6 +458,9 @@ final class VideoMetadata {
 
   /// Codec MIME type of the first audio track, such as `audio/mp4a-latm`.
   final String? audioCodec;
+
+  /// Average frames per second, when the container reports it.
+  final double? frameRate;
 }
 
 /// A running video compression.

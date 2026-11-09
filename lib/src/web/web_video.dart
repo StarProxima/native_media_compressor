@@ -4,11 +4,14 @@ import 'dart:typed_data';
 
 import 'package:web/web.dart' as web;
 
+import '../planning.dart';
 import '../types.dart';
 import 'browser.dart';
 import 'media_plan.dart';
 import 'mp4_demuxer.dart';
 import 'mp4_muxer.dart';
+import 'trim_range.dart';
+import 'web_audio.dart';
 
 /// Video probing from the MP4 demuxer.
 abstract final class WebVideoProbe {
@@ -37,6 +40,63 @@ abstract final class WebVideoProbe {
       hasAudio: audio.isNotEmpty,
       isHdr: video.isHdr,
       audioCodec: audio.isEmpty ? null : audio.first.mimeType,
+      frameRate: video.frameRate,
+    );
+  }
+}
+
+/// Reading the video track of a source, shared by compression and
+/// thumbnails.
+abstract final class WebVideoSource {
+  /// Matroska and WebM files start with the EBML magic number.
+  static Future<bool> isMatroska(ByteSource file) async {
+    if (file.length < 4) return false;
+    final head = await file.read(0, 4);
+
+    return head[0] == 0x1A &&
+        head[1] == 0x45 &&
+        head[2] == 0xDF &&
+        head[3] == 0xA3;
+  }
+
+  /// Decoder configuration for [video], or null when the browser cannot
+  /// decode it.
+  static Future<web.VideoDecoderConfig?> decoderConfig(Mp4Track video) async {
+    final codec = video.codecString;
+    if (codec == null) return null;
+    final config = web.VideoDecoderConfig(
+      codec: codec,
+      codedWidth: video.width,
+      codedHeight: video.height,
+    );
+    final description = video.codecConfig;
+    if (description != null && video.sampleEntryType != 'vp09') {
+      config.description = description.toJS;
+    }
+    try {
+      final support = await web.VideoDecoder.isConfigSupported(config).toDart;
+      if (support.supported) return config;
+    } on Object {
+      // A config the browser cannot parse is as unsupported as a missing
+      // decoder.
+    }
+    return null;
+  }
+
+  /// Decoder input for [sample] of [video], read from [file].
+  static Future<web.EncodedVideoChunk> chunk(
+    ByteSource file,
+    Mp4Track video,
+    Mp4Sample sample,
+  ) async {
+    final data = await file.read(sample.offset, sample.size);
+    return web.EncodedVideoChunk(
+      web.EncodedVideoChunkInit(
+        type: sample.isSync ? 'key' : 'delta',
+        timestamp: TrimRange.presentationUs(video, sample),
+        duration: (sample.duration * 1e6 / video.timescale).round(),
+        data: data.toJS,
+      ),
     );
   }
 }
@@ -48,8 +108,8 @@ final class _Stop implements Exception {
   final String? message;
 }
 
-/// One video compression: WebCodecs decode, scale on a canvas, H.264
-/// encode, and copied AAC audio, written by [Mp4Muxer].
+/// One video compression: WebCodecs decode, scale on a canvas, H.264 or
+/// HEVC encode, and AAC audio copied or re-encoded, written by [Mp4Muxer].
 final class WebVideoJob {
   WebVideoJob({
     required this.source,
@@ -67,6 +127,7 @@ final class WebVideoJob {
   _Stop? _stop;
   web.VideoDecoder? _decoder;
   web.VideoEncoder? _encoder;
+  final _transcoders = <AacTranscoder>[];
 
   void cancel() => _halt(const _Stop(CompressionStatus.cancelled));
 
@@ -82,6 +143,9 @@ final class WebVideoJob {
       } on Object {
         // Already closed.
       }
+    }
+    for (final transcoder in _transcoders) {
+      transcoder.close();
     }
   }
 
@@ -124,7 +188,7 @@ final class WebVideoJob {
     final file = BlobByteSource(blob);
     final movie = await Mp4Demuxer.parse(file);
     if (movie == null) {
-      throw await _isMatroska(file)
+      throw await WebVideoSource.isMatroska(file)
           ? const _Stop(
             CompressionStatus.unsupported,
             'Matroska and WebM are not read on the web',
@@ -144,51 +208,98 @@ final class WebVideoJob {
         'fragmented or empty video track',
       );
     }
-    final audio = options.includeAudio ? movie.audio : const <Mp4Track>[];
-    for (final track in audio) {
-      if (!track.isAac || track.esds == null || track.timescale <= 0) {
+    final range = TrimRange.of(
+      options.trimStart,
+      options.trimEnd,
+      TrimRange.videoEndUs(video),
+    );
+    final (firstSample, endSample) = range?.videoSamples(video) ?? (0, 0);
+    if (range == null || endSample <= firstSample) {
+      throw const _Stop(
+        CompressionStatus.unsupported,
+        'the trim range keeps no part of the video',
+      );
+    }
+
+    final audio = <(Mp4Track, AacTranscoder?)>[];
+    for (final track in options.includeAudio ? movie.audio : <Mp4Track>[]) {
+      if (track.timescale <= 0) {
         throw _Stop(
           CompressionStatus.unsupported,
-          'audio ${track.mimeType} cannot be copied without re-encoding',
+          'audio ${track.mimeType} has no timescale',
         );
       }
+      if (track.isAac && track.esds != null) {
+        audio.add((track, null));
+        continue;
+      }
+      final transcoder = await AacTranscoder.create(
+        track,
+        options.audioBitrate,
+      );
+      if (transcoder == null) {
+        throw _Stop(
+          CompressionStatus.unsupported,
+          'audio ${track.mimeType} cannot be re-encoded to AAC in this '
+          'browser',
+        );
+      }
+      _transcoders.add(transcoder);
+      audio.add((track, transcoder));
     }
     _check();
 
-    final decoderConfig = await _decoderConfig(video);
-    final quarterTurn = video.rotation % 180 != 0;
-    final (shownWidth, shownHeight) = MediaPlan.videoSize(
-      quarterTurn ? video.height : video.width,
-      quarterTurn ? video.width : video.height,
+    final decoderConfig = await WebVideoSource.decoderConfig(video);
+    if (decoderConfig == null) {
+      throw _Stop(
+        CompressionStatus.unsupported,
+        'the browser cannot decode ${video.codecString ?? video.mimeType}',
+      );
+    }
+    final (width, height) = MediaPlan.videoSize(
+      video.width,
+      video.height,
       options.maxShortSide,
       options.maxLongSide,
     );
-    final width = quarterTurn ? shownHeight : shownWidth;
-    final height = quarterTurn ? shownWidth : shownHeight;
-    final durationUs = _us(video.duration, video.timescale);
-    final sourceRate =
-        durationUs > 0 ? video.samples.length * 1e6 / durationUs : 30.0;
+    // The turn is written to the track matrix like the source rotation, so
+    // frames are encoded as stored.
+    final rotation = (video.rotation + 90 * options.rotateQuarterTurns) % 360;
+    final (shownWidth, shownHeight) =
+        rotation % 180 != 0 ? (height, width) : (width, height);
+    final sourceRate = video.frameRate ?? 30.0;
     final maxRate = options.maxFrameRate?.clamp(1, 240);
     final frameRate =
         maxRate != null && maxRate > 0 && maxRate < sourceRate
             ? maxRate.toDouble()
             : sourceRate;
-    final encoderConfig = await _encoderConfig(width, height, frameRate);
+    final (encoderConfig, hevc) = await _encoderConfig(
+      width,
+      height,
+      frameRate,
+    );
     _check();
 
     final muxer = Mp4Muxer();
-    final audioBytes = audio.fold(
-      0,
-      (total, track) =>
-          track.samples.fold(total, (sum, sample) => sum + sample.size),
-    );
-    final audioSamples = audio.fold(0, (n, track) => n + track.samples.length);
+    var audioBytes = 0;
+    var audioSamples = 0;
+    for (final (track, transcoder) in audio) {
+      final (first, end, _) = range.audioSamples(track);
+      audioSamples += end - first;
+      if (transcoder != null) {
+        audioBytes += transcoder.bitrate * range.durationUs ~/ 8000000;
+        continue;
+      }
+      for (var i = first; i < end; i++) {
+        audioBytes += track.samples[i].size;
+      }
+    }
     final maxBytes = options.maxBytes;
     int estimatedSize() =>
         muxer.mediaBytes +
         audioBytes +
         2048 +
-        32 * (video.samples.length + audioSamples);
+        32 * (endSample - firstSample + audioSamples);
 
     final canvas = web.OffscreenCanvas(width, height);
     final context =
@@ -196,12 +307,14 @@ final class WebVideoJob {
     final limiter = FrameRateLimiter(maxRate);
     var nextKeyFrameUs = 0;
     var keptFrames = 0;
-    var lastFrameDurationUs =
-        durationUs > 0 ? durationUs ~/ video.samples.length : 33333;
+    var lastFrameDurationUs = (1e6 / sourceRate).round();
 
     void onFrame(web.VideoFrame frame) {
-      final timestamp = frame.timestamp;
-      if (_stop != null || timestamp < 0 || !limiter.keep(timestamp)) {
+      final sourceTime = frame.timestamp;
+      final timestamp = sourceTime - range.startUs;
+      if (_stop != null ||
+          !range.keeps(sourceTime) ||
+          !limiter.keep(timestamp)) {
         frame.close();
         return;
       }
@@ -231,12 +344,12 @@ final class WebVideoJob {
     void onChunk(web.EncodedVideoChunk chunk, JSAny? metadata) {
       if (_stop != null) return;
       if (!muxer.hasVideo) {
-        final avcC = Browser.decoderDescription(metadata);
-        if (avcC == null) {
+        final config = Browser.decoderDescription(metadata);
+        if (config == null) {
           _halt(
-            const _Stop(
+            _Stop(
               CompressionStatus.failed,
-              'the encoder gave no avcC configuration',
+              'the encoder gave no ${hevc ? 'hvcC' : 'avcC'} configuration',
             ),
           );
           return;
@@ -245,8 +358,9 @@ final class WebVideoJob {
           width: width,
           height: height,
           timescale: video.timescale,
-          avcC: avcC,
-          rotation: video.rotation,
+          config: config,
+          hevc: hevc,
+          rotation: rotation,
         );
       }
       final data = JSUint8Array.withLength(chunk.byteLength);
@@ -260,7 +374,7 @@ final class WebVideoJob {
         ),
         isSync: chunk.type == 'key',
       );
-      if (durationUs > 0) _progress.report(0.95 * chunk.timestamp / durationUs);
+      _progress.report(0.95 * chunk.timestamp / range.durationUs);
       if (maxBytes != null && estimatedSize() > maxBytes) {
         _halt(const _Stop(CompressionStatus.tooLarge));
       }
@@ -276,26 +390,11 @@ final class WebVideoJob {
       web.VideoDecoderInit(output: onFrame.toJS, error: onError.toJS),
     )..configure(decoderConfig);
 
-    var started = false;
-    for (final sample in video.samples) {
+    for (var i = firstSample; i < endSample; i++) {
       _check();
-      if (!started && !sample.isSync) continue;
-      started = true;
-      final data = await file.read(sample.offset, sample.size);
+      final chunk = await WebVideoSource.chunk(file, video, video.samples[i]);
       _check();
-      _decoder!.decode(
-        web.EncodedVideoChunk(
-          web.EncodedVideoChunkInit(
-            type: sample.isSync ? 'key' : 'delta',
-            timestamp: _us(
-              sample.presentationTime - video.editMediaTime,
-              video.timescale,
-            ),
-            duration: _us(sample.duration, video.timescale),
-            data: data.toJS,
-          ),
-        ),
-      );
+      _decoder!.decode(chunk);
       while (_stop == null &&
           (_decoder!.decodeQueueSize > _queueLimit ||
               _encoder!.encodeQueueSize > _queueLimit)) {
@@ -311,13 +410,40 @@ final class WebVideoJob {
       throw const _Stop(CompressionStatus.failed, 'no frames were encoded');
     }
 
-    for (final track in audio) {
-      final index = muxer.addAudio(track);
-      for (final sample in track.samples) {
-        _check();
-        final data = await file.read(sample.offset, sample.size);
-        muxer.addAudioSample(index, Uint8List.fromList(data), sample.duration);
+    for (final (track, transcoder) in audio) {
+      final (first, end, skip) = range.audioSamples(track);
+      if (end <= first) continue;
+      if (transcoder == null) {
+        final index = muxer.addAudio(track, editMediaTime: skip);
+        for (var i = first; i < end; i++) {
+          _check();
+          final sample = track.samples[i];
+          final data = await file.read(sample.offset, sample.size);
+          muxer.addAudioSample(
+            index,
+            Uint8List.fromList(data),
+            sample.duration,
+          );
+        }
+        continue;
       }
+      await transcoder.run(
+        file: file,
+        range: range,
+        first: first,
+        end: end,
+        check: _check,
+      );
+      final index = muxer.addAacAudio(
+        timescale: transcoder.sampleRate,
+        esds: transcoder.esds,
+        channelCount: transcoder.channelCount,
+        sampleRate: transcoder.sampleRate,
+      );
+      for (final chunk in transcoder.chunks) {
+        muxer.addAudioSample(index, chunk, transcoder.frameDuration);
+      }
+      transcoder.close();
     }
 
     final parts = muxer.finish();
@@ -337,73 +463,43 @@ final class WebVideoJob {
       width: shownWidth,
       height: shownHeight,
       sizeBytes: output.size,
+      videoCodec: hevc ? 'video/hevc' : 'video/avc',
     );
   }
-
-  /// Matroska and WebM files start with the EBML magic number.
-  static Future<bool> _isMatroska(ByteSource file) async {
-    if (file.length < 4) return false;
-    final head = await file.read(0, 4);
-
-    return head[0] == 0x1A &&
-        head[1] == 0x45 &&
-        head[2] == 0xDF &&
-        head[3] == 0xA3;
-  }
-
-  static int _us(int ticks, int timescale) => (ticks * 1e6 / timescale).round();
 
   static int _ticks(int us, int timescale) => (us * timescale / 1e6).round();
 
-  static Future<web.VideoDecoderConfig> _decoderConfig(Mp4Track video) async {
-    final codec = video.codecString;
-    if (codec == null) {
-      throw _Stop(
-        CompressionStatus.unsupported,
-        'cannot decode ${video.mimeType}',
-      );
-    }
-    final config = web.VideoDecoderConfig(
-      codec: codec,
-      codedWidth: video.width,
-      codedHeight: video.height,
-    );
-    final description = video.codecConfig;
-    if (description != null && video.sampleEntryType != 'vp09') {
-      config.description = description.toJS;
-    }
-    try {
-      final support = await web.VideoDecoder.isConfigSupported(config).toDart;
-      if (support.supported) return config;
-    } on Object {
-      // A config the browser cannot parse is as unsupported as a missing
-      // decoder.
-    }
-    throw _Stop(
-      CompressionStatus.unsupported,
-      'the browser cannot decode $codec',
-    );
-  }
-
-  Future<web.VideoEncoderConfig> _encoderConfig(
+  /// The encoder configuration and whether it is HEVC: HEVC when asked for
+  /// and the browser has an encoder for it, H.264 otherwise.
+  Future<(web.VideoEncoderConfig, bool)> _encoderConfig(
     int width,
     int height,
     double frameRate,
   ) async {
-    for (final codec in MediaPlan.avcCodecs(width, height, frameRate)) {
-      final config = web.VideoEncoderConfig(
-        codec: codec,
-        width: width,
-        height: height,
-        bitrate: options.videoBitrate,
-        framerate: frameRate,
-        avc: web.AvcEncoderConfig(format: 'avc'),
-      );
+    final bitrate = VideoPlanning.videoBitrate(null, options);
+    web.VideoEncoderConfig config(String codec) => web.VideoEncoderConfig(
+      codec: codec,
+      width: width,
+      height: height,
+      bitrate: bitrate,
+      framerate: frameRate,
+      bitrateMode: 'variable',
+      latencyMode: 'quality',
+    );
+    final candidates = [
+      if (options.codec == VideoCodec.hevc)
+        for (final codec in MediaPlan.hevcCodecs(width, height, frameRate))
+          (config(codec)..hevc = web.HevcEncoderConfig(format: 'hevc'), true),
+      for (final codec in MediaPlan.avcCodecs(width, height, frameRate))
+        (config(codec)..avc = web.AvcEncoderConfig(format: 'avc'), false),
+    ];
+    for (final candidate in candidates) {
       try {
-        final support = await web.VideoEncoder.isConfigSupported(config).toDart;
-        if (support.supported) return config;
+        final support =
+            await web.VideoEncoder.isConfigSupported(candidate.$1).toDart;
+        if (support.supported) return candidate;
       } on Object {
-        // Try the next profile.
+        // Try the next codec.
       }
     }
     throw _Stop(

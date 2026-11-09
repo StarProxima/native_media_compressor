@@ -5,6 +5,12 @@ import 'package:path_provider/path_provider.dart';
 
 late Directory _work;
 
+/// Whether this runs in the iOS simulator, whose software H.264 encoder does
+/// not go below about 1.5 Mbit/s at 1080p, so sizes there do not follow the
+/// requested bitrate.
+bool get isIosSimulator =>
+    Platform.isIOS && Platform.resolvedExecutable.contains('/CoreSimulator/');
+
 Future<void> setUpFiles() async {
   final temp = await getTemporaryDirectory();
   _work = await Directory('${temp.path}/nmc_test').create(recursive: true);
@@ -24,6 +30,8 @@ Future<String> fixture(String name) async {
 String outputPath(String name) => '${_work.path}/out-$name';
 
 Future<int> sizeOf(String location) async => File(location).lengthSync();
+
+Future<Uint8List> bytesOf(String location) => File(location).readAsBytes();
 
 bool exists(String path) => File(path).existsSync();
 

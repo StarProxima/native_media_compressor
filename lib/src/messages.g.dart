@@ -122,6 +122,9 @@ enum CompressionStatus {
 
 enum ImageFormat { jpeg, png }
 
+/// Codec of the output video track.
+enum VideoCodec { h264, hevc }
+
 class VideoRequest {
   VideoRequest({
     required this.source,
@@ -132,6 +135,11 @@ class VideoRequest {
     this.maxFrameRate,
     this.maxBytes,
     required this.includeAudio,
+    required this.codec,
+    this.startMs,
+    this.endMs,
+    required this.rotateQuarterTurns,
+    required this.audioBitrate,
   });
 
   String source;
@@ -150,6 +158,24 @@ class VideoRequest {
 
   bool includeAudio;
 
+  /// Preferred output codec; HEVC falls back to H.264 where the platform has
+  /// no HEVC encoder. The reply names the codec actually written.
+  VideoCodec codec;
+
+  /// Start of the kept range in the source timeline; null keeps from the
+  /// start.
+  int? startMs;
+
+  /// End of the kept range in the source timeline; null keeps to the end.
+  int? endMs;
+
+  /// Clockwise quarter turns on top of the displayed orientation, 0 to 3.
+  int rotateQuarterTurns;
+
+  /// Bitrate for audio that has to be re-encoded to AAC. AAC audio is copied
+  /// as is.
+  int audioBitrate;
+
   List<Object?> _toList() {
     return <Object?>[
       source,
@@ -160,6 +186,11 @@ class VideoRequest {
       maxFrameRate,
       maxBytes,
       includeAudio,
+      codec,
+      startMs,
+      endMs,
+      rotateQuarterTurns,
+      audioBitrate,
     ];
   }
 
@@ -178,6 +209,11 @@ class VideoRequest {
       maxFrameRate: result[5] as int?,
       maxBytes: result[6] as int?,
       includeAudio: result[7]! as bool,
+      codec: result[8]! as VideoCodec,
+      startMs: result[9] as int?,
+      endMs: result[10] as int?,
+      rotateQuarterTurns: result[11]! as int,
+      audioBitrate: result[12]! as int,
     );
   }
 
@@ -197,7 +233,91 @@ class VideoRequest {
         _deepEquals(videoBitrate, other.videoBitrate) &&
         _deepEquals(maxFrameRate, other.maxFrameRate) &&
         _deepEquals(maxBytes, other.maxBytes) &&
-        _deepEquals(includeAudio, other.includeAudio);
+        _deepEquals(includeAudio, other.includeAudio) &&
+        _deepEquals(codec, other.codec) &&
+        _deepEquals(startMs, other.startMs) &&
+        _deepEquals(endMs, other.endMs) &&
+        _deepEquals(rotateQuarterTurns, other.rotateQuarterTurns) &&
+        _deepEquals(audioBitrate, other.audioBitrate);
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  int get hashCode => _deepHash(<Object?>[runtimeType, ..._toList()]);
+}
+
+class ThumbnailRequest {
+  ThumbnailRequest({
+    required this.source,
+    required this.destination,
+    required this.positionMs,
+    this.maxShortSide,
+    this.maxLongSide,
+    required this.format,
+    required this.quality,
+  });
+
+  String source;
+
+  String destination;
+
+  /// Frame position in the source timeline; past the end means the last
+  /// frame.
+  int positionMs;
+
+  int? maxShortSide;
+
+  int? maxLongSide;
+
+  ImageFormat format;
+
+  int quality;
+
+  List<Object?> _toList() {
+    return <Object?>[
+      source,
+      destination,
+      positionMs,
+      maxShortSide,
+      maxLongSide,
+      format,
+      quality,
+    ];
+  }
+
+  Object encode() {
+    return _toList();
+  }
+
+  static ThumbnailRequest decode(Object result) {
+    result as List<Object?>;
+    return ThumbnailRequest(
+      source: result[0]! as String,
+      destination: result[1]! as String,
+      positionMs: result[2]! as int,
+      maxShortSide: result[3] as int?,
+      maxLongSide: result[4] as int?,
+      format: result[5]! as ImageFormat,
+      quality: result[6]! as int,
+    );
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  bool operator ==(Object other) {
+    if (other is! ThumbnailRequest || other.runtimeType != runtimeType) {
+      return false;
+    }
+    if (identical(this, other)) {
+      return true;
+    }
+    return _deepEquals(source, other.source) &&
+        _deepEquals(destination, other.destination) &&
+        _deepEquals(positionMs, other.positionMs) &&
+        _deepEquals(maxShortSide, other.maxShortSide) &&
+        _deepEquals(maxLongSide, other.maxLongSide) &&
+        _deepEquals(format, other.format) &&
+        _deepEquals(quality, other.quality);
   }
 
   @override
@@ -283,6 +403,7 @@ class CompressionReply {
     this.height,
     this.sizeBytes,
     this.message,
+    this.videoCodec,
   });
 
   CompressionStatus status;
@@ -295,8 +416,11 @@ class CompressionReply {
 
   String? message;
 
+  /// Codec of the written video track, as a MIME type such as `video/avc`.
+  String? videoCodec;
+
   List<Object?> _toList() {
-    return <Object?>[status, width, height, sizeBytes, message];
+    return <Object?>[status, width, height, sizeBytes, message, videoCodec];
   }
 
   Object encode() {
@@ -311,6 +435,7 @@ class CompressionReply {
       height: result[2] as int?,
       sizeBytes: result[3] as int?,
       message: result[4] as String?,
+      videoCodec: result[5] as String?,
     );
   }
 
@@ -327,7 +452,8 @@ class CompressionReply {
         _deepEquals(width, other.width) &&
         _deepEquals(height, other.height) &&
         _deepEquals(sizeBytes, other.sizeBytes) &&
-        _deepEquals(message, other.message);
+        _deepEquals(message, other.message) &&
+        _deepEquals(videoCodec, other.videoCodec);
   }
 
   @override
@@ -400,6 +526,7 @@ class VideoProbe {
     required this.isHdr,
     required this.hasAudio,
     this.audioCodec,
+    this.frameRate,
   });
 
   int width;
@@ -420,6 +547,10 @@ class VideoProbe {
 
   String? audioCodec;
 
+  /// Average frames per second of the video track, when the container
+  /// reports it.
+  double? frameRate;
+
   List<Object?> _toList() {
     return <Object?>[
       width,
@@ -431,6 +562,7 @@ class VideoProbe {
       isHdr,
       hasAudio,
       audioCodec,
+      frameRate,
     ];
   }
 
@@ -450,6 +582,7 @@ class VideoProbe {
       isHdr: result[6]! as bool,
       hasAudio: result[7]! as bool,
       audioCodec: result[8] as String?,
+      frameRate: result[9] as double?,
     );
   }
 
@@ -470,7 +603,8 @@ class VideoProbe {
         _deepEquals(videoCodec, other.videoCodec) &&
         _deepEquals(isHdr, other.isHdr) &&
         _deepEquals(hasAudio, other.hasAudio) &&
-        _deepEquals(audioCodec, other.audioCodec);
+        _deepEquals(audioCodec, other.audioCodec) &&
+        _deepEquals(frameRate, other.frameRate);
   }
 
   @override
@@ -491,20 +625,26 @@ class _PigeonCodec extends StandardMessageCodec {
     } else if (value is ImageFormat) {
       buffer.putUint8(130);
       writeValue(buffer, value.index);
-    } else if (value is VideoRequest) {
+    } else if (value is VideoCodec) {
       buffer.putUint8(131);
-      writeValue(buffer, value.encode());
-    } else if (value is ImageRequest) {
+      writeValue(buffer, value.index);
+    } else if (value is VideoRequest) {
       buffer.putUint8(132);
       writeValue(buffer, value.encode());
-    } else if (value is CompressionReply) {
+    } else if (value is ThumbnailRequest) {
       buffer.putUint8(133);
       writeValue(buffer, value.encode());
-    } else if (value is ImageProbe) {
+    } else if (value is ImageRequest) {
       buffer.putUint8(134);
       writeValue(buffer, value.encode());
-    } else if (value is VideoProbe) {
+    } else if (value is CompressionReply) {
       buffer.putUint8(135);
+      writeValue(buffer, value.encode());
+    } else if (value is ImageProbe) {
+      buffer.putUint8(136);
+      writeValue(buffer, value.encode());
+    } else if (value is VideoProbe) {
+      buffer.putUint8(137);
       writeValue(buffer, value.encode());
     } else {
       super.writeValue(buffer, value);
@@ -521,14 +661,19 @@ class _PigeonCodec extends StandardMessageCodec {
         final value = readValue(buffer) as int?;
         return value == null ? null : ImageFormat.values[value];
       case 131:
-        return VideoRequest.decode(readValue(buffer)!);
+        final value = readValue(buffer) as int?;
+        return value == null ? null : VideoCodec.values[value];
       case 132:
-        return ImageRequest.decode(readValue(buffer)!);
+        return VideoRequest.decode(readValue(buffer)!);
       case 133:
-        return CompressionReply.decode(readValue(buffer)!);
+        return ThumbnailRequest.decode(readValue(buffer)!);
       case 134:
-        return ImageProbe.decode(readValue(buffer)!);
+        return ImageRequest.decode(readValue(buffer)!);
       case 135:
+        return CompressionReply.decode(readValue(buffer)!);
+      case 136:
+        return ImageProbe.decode(readValue(buffer)!);
+      case 137:
         return VideoProbe.decode(readValue(buffer)!);
       default:
         return super.readValueOfType(type, buffer);
@@ -657,6 +802,27 @@ class MediaCompressorHostApi {
       isNullValid: true,
     );
     return pigeonVar_replyValue as VideoProbe?;
+  }
+
+  Future<CompressionReply> videoThumbnail(ThumbnailRequest request) async {
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.native_media_compressor.MediaCompressorHostApi.videoThumbnail$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[request],
+    );
+    final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
+
+    final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
+      pigeonVar_replyList,
+      pigeonVar_channelName,
+      isNullValid: false,
+    );
+    return pigeonVar_replyValue! as CompressionReply;
   }
 }
 

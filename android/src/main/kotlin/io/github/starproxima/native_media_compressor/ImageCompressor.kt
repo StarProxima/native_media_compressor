@@ -3,15 +3,11 @@ package io.github.starproxima.native_media_compressor
 import android.annotation.TargetApi
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.graphics.Canvas
-import android.graphics.Color
 import android.graphics.ImageDecoder
 import android.graphics.Matrix
-import android.graphics.Paint
 import android.media.ExifInterface
 import android.os.Build
 import java.io.File
-import java.io.FileOutputStream
 import java.io.IOException
 
 internal class ImageCompressor(private val source: MediaSource, private val request: ImageRequest) {
@@ -42,21 +38,7 @@ internal class ImageCompressor(private val source: MediaSource, private val requ
             val status = if (cannotDecode(mimeType)) CompressionStatus.UNSUPPORTED else CompressionStatus.FAILED
             return CompressionReply(status, message = "${mimeType ?: "unknown format"}: $error")
         }
-        val isJpeg = request.format == ImageFormat.JPEG
-        val bitmap = encodable(decoded, flattenAlpha = isJpeg)
-        try {
-            val format = if (isJpeg) Bitmap.CompressFormat.JPEG else Bitmap.CompressFormat.PNG
-            val written = FileOutputStream(destination).use { bitmap.compress(format, request.quality.toInt().coerceIn(0, 100), it) }
-            if (!written) return CompressionReply(CompressionStatus.FAILED, message = "the $format encoder failed")
-            return CompressionReply(
-                CompressionStatus.COMPRESSED,
-                width = bitmap.width.toLong(),
-                height = bitmap.height.toLong(),
-                sizeBytes = destination.length(),
-            )
-        } finally {
-            bitmap.recycle()
-        }
+        return BitmapOutput.write(decoded, request.format, request.quality, destination)
     }
 
     @TargetApi(Build.VERSION_CODES.P)
@@ -90,18 +72,6 @@ internal class ImageCompressor(private val source: MediaSource, private val requ
         val matrix = orientationMatrix(orientation) ?: return scaled
         return Bitmap.createBitmap(scaled, 0, 0, scaled.width, scaled.height, matrix, true)
             .also { if (it !== scaled) scaled.recycle() }
-    }
-
-    // JPEG has no alpha: transparent pixels would turn black without a white backdrop.
-    private fun encodable(bitmap: Bitmap, flattenAlpha: Boolean): Bitmap {
-        val flatten = flattenAlpha && bitmap.hasAlpha()
-        if (!flatten && bitmap.config == Bitmap.Config.ARGB_8888) return bitmap
-        val copy = Bitmap.createBitmap(bitmap.width, bitmap.height, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(copy)
-        if (flatten) canvas.drawColor(Color.WHITE)
-        canvas.drawBitmap(bitmap, 0f, 0f, Paint(Paint.FILTER_BITMAP_FLAG))
-        bitmap.recycle()
-        return copy
     }
 
     private fun cannotDecode(mimeType: String?): Boolean = when (mimeType) {

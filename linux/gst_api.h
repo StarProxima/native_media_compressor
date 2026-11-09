@@ -29,6 +29,7 @@ namespace native_media_compressor {
   X(gst_element_request_pad_simple)         \
   X(gst_element_release_request_pad)        \
   X(gst_element_sync_state_with_parent)     \
+  X(gst_element_send_event)                 \
   X(gst_bus_timed_pop_filtered)             \
   X(gst_message_parse_error)                \
   X(gst_structure_get_name)                 \
@@ -42,8 +43,21 @@ namespace native_media_compressor {
   X(gst_pad_add_probe)                      \
   X(gst_pad_get_current_caps)               \
   X(gst_pad_query_caps)                     \
+  X(gst_pad_remove_probe)                   \
+  X(gst_pad_send_event)                     \
+  X(gst_event_new_eos)                      \
+  X(gst_event_new_seek)                     \
+  X(gst_event_new_segment)                  \
+  X(gst_event_parse_segment)                \
+  X(gst_segment_init)                       \
+  X(gst_segment_to_stream_time)             \
   X(gst_buffer_get_size)                    \
+  X(gst_buffer_map)                         \
+  X(gst_buffer_unmap)                       \
+  X(gst_mini_object_ref)                    \
+  X(gst_mini_object_make_writable)          \
   X(gst_mini_object_unref)                  \
+  X(gst_object_ref)                         \
   X(gst_object_unref)                       \
   X(gst_tag_list_get_string)                \
   X(gst_util_set_object_arg)                \
@@ -51,19 +65,21 @@ namespace native_media_compressor {
   X(gst_core_error_quark)                   \
   X(gst_stream_error_quark)
 
-#define NMC_GST_PBUTILS_FUNCTIONS(X)          \
-  X(gst_discoverer_new)                       \
-  X(gst_discoverer_discover_uri)              \
-  X(gst_discoverer_info_get_result)           \
-  X(gst_discoverer_info_get_duration)         \
-  X(gst_discoverer_info_get_tags)             \
-  X(gst_discoverer_info_get_video_streams)    \
-  X(gst_discoverer_info_get_audio_streams)    \
-  X(gst_discoverer_stream_info_list_free)     \
-  X(gst_discoverer_stream_info_get_caps)      \
-  X(gst_discoverer_stream_info_get_tags)      \
-  X(gst_discoverer_video_info_get_width)      \
-  X(gst_discoverer_video_info_get_height)     \
+#define NMC_GST_PBUTILS_FUNCTIONS(X)               \
+  X(gst_discoverer_new)                            \
+  X(gst_discoverer_discover_uri)                   \
+  X(gst_discoverer_info_get_result)                \
+  X(gst_discoverer_info_get_duration)              \
+  X(gst_discoverer_info_get_tags)                  \
+  X(gst_discoverer_info_get_video_streams)         \
+  X(gst_discoverer_info_get_audio_streams)         \
+  X(gst_discoverer_stream_info_list_free)          \
+  X(gst_discoverer_stream_info_get_caps)           \
+  X(gst_discoverer_stream_info_get_tags)           \
+  X(gst_discoverer_video_info_get_width)           \
+  X(gst_discoverer_video_info_get_height)          \
+  X(gst_discoverer_video_info_get_framerate_num)   \
+  X(gst_discoverer_video_info_get_framerate_denom) \
   X(gst_discoverer_video_info_is_image)
 
 #define NMC_GST_VIDEO_FUNCTIONS(X) X(gst_video_colorimetry_from_string)

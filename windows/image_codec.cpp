@@ -475,4 +475,38 @@ std::optional<ImageInfo> ProbeImageFile(const std::wstring& source) {
   return info;
 }
 
+Outcome WriteFrameImage(const std::vector<uint8_t>& bgra, uint32_t width, uint32_t height,
+                        const ImageJob& job, const std::wstring& output) {
+  if (width == 0 || height == 0 || bgra.size() != static_cast<size_t>(width) * height * 4) {
+    return Outcome::Of(Status::kFailed, "The frame has no pixels");
+  }
+  ComPtr<IWICImagingFactory> factory;
+  NMC_RETURN_IF_FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                                        IID_PPV_ARGS(&factory)),
+                       "Creating the WIC factory");
+  const double scale = FitScale(width, height, job.bounds);
+  const UINT out_width = std::max<UINT>(1, static_cast<UINT>(std::lround(width * scale)));
+  const UINT out_height = std::max<UINT>(1, static_cast<UINT>(std::lround(height * scale)));
+  if (out_width == width && out_height == height) {
+    return Encode(factory.Get(), job, output, bgra, width, height);
+  }
+
+  ComPtr<IWICBitmap> bitmap;
+  NMC_RETURN_IF_FAILED(
+      factory->CreateBitmapFromMemory(width, height, GUID_WICPixelFormat32bppPBGRA, width * 4,
+                                      static_cast<UINT>(bgra.size()),
+                                      const_cast<BYTE*>(bgra.data()), &bitmap),
+      "Copying the frame");
+  ComPtr<IWICBitmapScaler> scaler;
+  NMC_RETURN_IF_FAILED(factory->CreateBitmapScaler(&scaler), "Creating a scaler");
+  NMC_RETURN_IF_FAILED(
+      scaler->Initialize(bitmap.Get(), out_width, out_height, WICBitmapInterpolationModeFant),
+      "Scaling the frame");
+  std::vector<BYTE> pixels(static_cast<size_t>(out_width) * out_height * 4);
+  NMC_RETURN_IF_FAILED(scaler->CopyPixels(nullptr, out_width * 4, static_cast<UINT>(pixels.size()),
+                                          pixels.data()),
+                       "Scaling the frame");
+  return Encode(factory.Get(), job, output, pixels, out_width, out_height);
+}
+
 }  // namespace native_media_compressor

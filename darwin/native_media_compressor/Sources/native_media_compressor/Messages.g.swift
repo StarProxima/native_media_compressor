@@ -192,6 +192,12 @@ enum ImageFormat: Int {
   case png = 1
 }
 
+/// Codec of the output video track.
+enum VideoCodec: Int {
+  case h264 = 0
+  case hevc = 1
+}
+
 /// Generated class from Pigeon that represents data sent in messages.
 struct VideoRequest: Hashable {
   var source: String
@@ -202,6 +208,19 @@ struct VideoRequest: Hashable {
   var maxFrameRate: Int64? = nil
   var maxBytes: Int64? = nil
   var includeAudio: Bool
+  /// Preferred output codec; HEVC falls back to H.264 where the platform has
+  /// no HEVC encoder. The reply names the codec actually written.
+  var codec: VideoCodec
+  /// Start of the kept range in the source timeline; null keeps from the
+  /// start.
+  var startMs: Int64? = nil
+  /// End of the kept range in the source timeline; null keeps to the end.
+  var endMs: Int64? = nil
+  /// Clockwise quarter turns on top of the displayed orientation, 0 to 3.
+  var rotateQuarterTurns: Int64
+  /// Bitrate for audio that has to be re-encoded to AAC. AAC audio is copied
+  /// as is.
+  var audioBitrate: Int64
 
 
   // swift-format-ignore: AlwaysUseLowerCamelCase
@@ -214,6 +233,11 @@ struct VideoRequest: Hashable {
     let maxFrameRate: Int64? = nilOrValue(pigeonVar_list[5])
     let maxBytes: Int64? = nilOrValue(pigeonVar_list[6])
     let includeAudio = pigeonVar_list[7] as! Bool
+    let codec = pigeonVar_list[8] as! VideoCodec
+    let startMs: Int64? = nilOrValue(pigeonVar_list[9])
+    let endMs: Int64? = nilOrValue(pigeonVar_list[10])
+    let rotateQuarterTurns = pigeonVar_list[11] as! Int64
+    let audioBitrate = pigeonVar_list[12] as! Int64
 
     return VideoRequest(
       source: source,
@@ -223,7 +247,12 @@ struct VideoRequest: Hashable {
       videoBitrate: videoBitrate,
       maxFrameRate: maxFrameRate,
       maxBytes: maxBytes,
-      includeAudio: includeAudio
+      includeAudio: includeAudio,
+      codec: codec,
+      startMs: startMs,
+      endMs: endMs,
+      rotateQuarterTurns: rotateQuarterTurns,
+      audioBitrate: audioBitrate
     )
   }
   func toList() -> [Any?] {
@@ -236,13 +265,18 @@ struct VideoRequest: Hashable {
       maxFrameRate,
       maxBytes,
       includeAudio,
+      codec,
+      startMs,
+      endMs,
+      rotateQuarterTurns,
+      audioBitrate,
     ]
   }
   static func == (lhs: VideoRequest, rhs: VideoRequest) -> Bool {
     if Swift.type(of: lhs) != Swift.type(of: rhs) {
       return false
     }
-    return deepEqualsMessages(lhs.source, rhs.source) && deepEqualsMessages(lhs.destination, rhs.destination) && deepEqualsMessages(lhs.maxShortSide, rhs.maxShortSide) && deepEqualsMessages(lhs.maxLongSide, rhs.maxLongSide) && deepEqualsMessages(lhs.videoBitrate, rhs.videoBitrate) && deepEqualsMessages(lhs.maxFrameRate, rhs.maxFrameRate) && deepEqualsMessages(lhs.maxBytes, rhs.maxBytes) && deepEqualsMessages(lhs.includeAudio, rhs.includeAudio)
+    return deepEqualsMessages(lhs.source, rhs.source) && deepEqualsMessages(lhs.destination, rhs.destination) && deepEqualsMessages(lhs.maxShortSide, rhs.maxShortSide) && deepEqualsMessages(lhs.maxLongSide, rhs.maxLongSide) && deepEqualsMessages(lhs.videoBitrate, rhs.videoBitrate) && deepEqualsMessages(lhs.maxFrameRate, rhs.maxFrameRate) && deepEqualsMessages(lhs.maxBytes, rhs.maxBytes) && deepEqualsMessages(lhs.includeAudio, rhs.includeAudio) && deepEqualsMessages(lhs.codec, rhs.codec) && deepEqualsMessages(lhs.startMs, rhs.startMs) && deepEqualsMessages(lhs.endMs, rhs.endMs) && deepEqualsMessages(lhs.rotateQuarterTurns, rhs.rotateQuarterTurns) && deepEqualsMessages(lhs.audioBitrate, rhs.audioBitrate)
   }
 
   func hash(into hasher: inout Hasher) {
@@ -255,6 +289,74 @@ struct VideoRequest: Hashable {
     deepHashMessages(value: maxFrameRate, hasher: &hasher)
     deepHashMessages(value: maxBytes, hasher: &hasher)
     deepHashMessages(value: includeAudio, hasher: &hasher)
+    deepHashMessages(value: codec, hasher: &hasher)
+    deepHashMessages(value: startMs, hasher: &hasher)
+    deepHashMessages(value: endMs, hasher: &hasher)
+    deepHashMessages(value: rotateQuarterTurns, hasher: &hasher)
+    deepHashMessages(value: audioBitrate, hasher: &hasher)
+  }
+}
+
+/// Generated class from Pigeon that represents data sent in messages.
+struct ThumbnailRequest: Hashable {
+  var source: String
+  var destination: String
+  /// Frame position in the source timeline; past the end means the last
+  /// frame.
+  var positionMs: Int64
+  var maxShortSide: Int64? = nil
+  var maxLongSide: Int64? = nil
+  var format: ImageFormat
+  var quality: Int64
+
+
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  static func fromList(_ pigeonVar_list: [Any?]) -> ThumbnailRequest? {
+    let source = pigeonVar_list[0] as! String
+    let destination = pigeonVar_list[1] as! String
+    let positionMs = pigeonVar_list[2] as! Int64
+    let maxShortSide: Int64? = nilOrValue(pigeonVar_list[3])
+    let maxLongSide: Int64? = nilOrValue(pigeonVar_list[4])
+    let format = pigeonVar_list[5] as! ImageFormat
+    let quality = pigeonVar_list[6] as! Int64
+
+    return ThumbnailRequest(
+      source: source,
+      destination: destination,
+      positionMs: positionMs,
+      maxShortSide: maxShortSide,
+      maxLongSide: maxLongSide,
+      format: format,
+      quality: quality
+    )
+  }
+  func toList() -> [Any?] {
+    return [
+      source,
+      destination,
+      positionMs,
+      maxShortSide,
+      maxLongSide,
+      format,
+      quality,
+    ]
+  }
+  static func == (lhs: ThumbnailRequest, rhs: ThumbnailRequest) -> Bool {
+    if Swift.type(of: lhs) != Swift.type(of: rhs) {
+      return false
+    }
+    return deepEqualsMessages(lhs.source, rhs.source) && deepEqualsMessages(lhs.destination, rhs.destination) && deepEqualsMessages(lhs.positionMs, rhs.positionMs) && deepEqualsMessages(lhs.maxShortSide, rhs.maxShortSide) && deepEqualsMessages(lhs.maxLongSide, rhs.maxLongSide) && deepEqualsMessages(lhs.format, rhs.format) && deepEqualsMessages(lhs.quality, rhs.quality)
+  }
+
+  func hash(into hasher: inout Hasher) {
+    hasher.combine("ThumbnailRequest")
+    deepHashMessages(value: source, hasher: &hasher)
+    deepHashMessages(value: destination, hasher: &hasher)
+    deepHashMessages(value: positionMs, hasher: &hasher)
+    deepHashMessages(value: maxShortSide, hasher: &hasher)
+    deepHashMessages(value: maxLongSide, hasher: &hasher)
+    deepHashMessages(value: format, hasher: &hasher)
+    deepHashMessages(value: quality, hasher: &hasher)
   }
 }
 
@@ -321,6 +423,8 @@ struct CompressionReply: Hashable {
   var height: Int64? = nil
   var sizeBytes: Int64? = nil
   var message: String? = nil
+  /// Codec of the written video track, as a MIME type such as `video/avc`.
+  var videoCodec: String? = nil
 
 
   // swift-format-ignore: AlwaysUseLowerCamelCase
@@ -330,13 +434,15 @@ struct CompressionReply: Hashable {
     let height: Int64? = nilOrValue(pigeonVar_list[2])
     let sizeBytes: Int64? = nilOrValue(pigeonVar_list[3])
     let message: String? = nilOrValue(pigeonVar_list[4])
+    let videoCodec: String? = nilOrValue(pigeonVar_list[5])
 
     return CompressionReply(
       status: status,
       width: width,
       height: height,
       sizeBytes: sizeBytes,
-      message: message
+      message: message,
+      videoCodec: videoCodec
     )
   }
   func toList() -> [Any?] {
@@ -346,13 +452,14 @@ struct CompressionReply: Hashable {
       height,
       sizeBytes,
       message,
+      videoCodec,
     ]
   }
   static func == (lhs: CompressionReply, rhs: CompressionReply) -> Bool {
     if Swift.type(of: lhs) != Swift.type(of: rhs) {
       return false
     }
-    return deepEqualsMessages(lhs.status, rhs.status) && deepEqualsMessages(lhs.width, rhs.width) && deepEqualsMessages(lhs.height, rhs.height) && deepEqualsMessages(lhs.sizeBytes, rhs.sizeBytes) && deepEqualsMessages(lhs.message, rhs.message)
+    return deepEqualsMessages(lhs.status, rhs.status) && deepEqualsMessages(lhs.width, rhs.width) && deepEqualsMessages(lhs.height, rhs.height) && deepEqualsMessages(lhs.sizeBytes, rhs.sizeBytes) && deepEqualsMessages(lhs.message, rhs.message) && deepEqualsMessages(lhs.videoCodec, rhs.videoCodec)
   }
 
   func hash(into hasher: inout Hasher) {
@@ -362,6 +469,7 @@ struct CompressionReply: Hashable {
     deepHashMessages(value: height, hasher: &hasher)
     deepHashMessages(value: sizeBytes, hasher: &hasher)
     deepHashMessages(value: message, hasher: &hasher)
+    deepHashMessages(value: videoCodec, hasher: &hasher)
   }
 }
 
@@ -422,6 +530,9 @@ struct VideoProbe: Hashable {
   var isHdr: Bool
   var hasAudio: Bool
   var audioCodec: String? = nil
+  /// Average frames per second of the video track, when the container
+  /// reports it.
+  var frameRate: Double? = nil
 
 
   // swift-format-ignore: AlwaysUseLowerCamelCase
@@ -435,6 +546,7 @@ struct VideoProbe: Hashable {
     let isHdr = pigeonVar_list[6] as! Bool
     let hasAudio = pigeonVar_list[7] as! Bool
     let audioCodec: String? = nilOrValue(pigeonVar_list[8])
+    let frameRate: Double? = nilOrValue(pigeonVar_list[9])
 
     return VideoProbe(
       width: width,
@@ -445,7 +557,8 @@ struct VideoProbe: Hashable {
       videoCodec: videoCodec,
       isHdr: isHdr,
       hasAudio: hasAudio,
-      audioCodec: audioCodec
+      audioCodec: audioCodec,
+      frameRate: frameRate
     )
   }
   func toList() -> [Any?] {
@@ -459,13 +572,14 @@ struct VideoProbe: Hashable {
       isHdr,
       hasAudio,
       audioCodec,
+      frameRate,
     ]
   }
   static func == (lhs: VideoProbe, rhs: VideoProbe) -> Bool {
     if Swift.type(of: lhs) != Swift.type(of: rhs) {
       return false
     }
-    return deepEqualsMessages(lhs.width, rhs.width) && deepEqualsMessages(lhs.height, rhs.height) && deepEqualsMessages(lhs.rotationDegrees, rhs.rotationDegrees) && deepEqualsMessages(lhs.durationMs, rhs.durationMs) && deepEqualsMessages(lhs.bitrate, rhs.bitrate) && deepEqualsMessages(lhs.videoCodec, rhs.videoCodec) && deepEqualsMessages(lhs.isHdr, rhs.isHdr) && deepEqualsMessages(lhs.hasAudio, rhs.hasAudio) && deepEqualsMessages(lhs.audioCodec, rhs.audioCodec)
+    return deepEqualsMessages(lhs.width, rhs.width) && deepEqualsMessages(lhs.height, rhs.height) && deepEqualsMessages(lhs.rotationDegrees, rhs.rotationDegrees) && deepEqualsMessages(lhs.durationMs, rhs.durationMs) && deepEqualsMessages(lhs.bitrate, rhs.bitrate) && deepEqualsMessages(lhs.videoCodec, rhs.videoCodec) && deepEqualsMessages(lhs.isHdr, rhs.isHdr) && deepEqualsMessages(lhs.hasAudio, rhs.hasAudio) && deepEqualsMessages(lhs.audioCodec, rhs.audioCodec) && deepEqualsMessages(lhs.frameRate, rhs.frameRate)
   }
 
   func hash(into hasher: inout Hasher) {
@@ -479,6 +593,7 @@ struct VideoProbe: Hashable {
     deepHashMessages(value: isHdr, hasher: &hasher)
     deepHashMessages(value: hasAudio, hasher: &hasher)
     deepHashMessages(value: audioCodec, hasher: &hasher)
+    deepHashMessages(value: frameRate, hasher: &hasher)
   }
 }
 
@@ -498,14 +613,22 @@ private class MessagesPigeonCodecReader: FlutterStandardReader {
       }
       return nil
     case 131:
-      return VideoRequest.fromList(self.readValue() as! [Any?])
+      let enumResultAsInt: Int? = nilOrValue(self.readValue() as! Int?)
+      if let enumResultAsInt = enumResultAsInt {
+        return VideoCodec(rawValue: enumResultAsInt)
+      }
+      return nil
     case 132:
-      return ImageRequest.fromList(self.readValue() as! [Any?])
+      return VideoRequest.fromList(self.readValue() as! [Any?])
     case 133:
-      return CompressionReply.fromList(self.readValue() as! [Any?])
+      return ThumbnailRequest.fromList(self.readValue() as! [Any?])
     case 134:
-      return ImageProbe.fromList(self.readValue() as! [Any?])
+      return ImageRequest.fromList(self.readValue() as! [Any?])
     case 135:
+      return CompressionReply.fromList(self.readValue() as! [Any?])
+    case 136:
+      return ImageProbe.fromList(self.readValue() as! [Any?])
+    case 137:
       return VideoProbe.fromList(self.readValue() as! [Any?])
     default:
       return super.readValue(ofType: type)
@@ -521,20 +644,26 @@ private class MessagesPigeonCodecWriter: FlutterStandardWriter {
     } else if let value = value as? ImageFormat {
       super.writeByte(130)
       super.writeValue(value.rawValue)
-    } else if let value = value as? VideoRequest {
+    } else if let value = value as? VideoCodec {
       super.writeByte(131)
-      super.writeValue(value.toList())
-    } else if let value = value as? ImageRequest {
+      super.writeValue(value.rawValue)
+    } else if let value = value as? VideoRequest {
       super.writeByte(132)
       super.writeValue(value.toList())
-    } else if let value = value as? CompressionReply {
+    } else if let value = value as? ThumbnailRequest {
       super.writeByte(133)
       super.writeValue(value.toList())
-    } else if let value = value as? ImageProbe {
+    } else if let value = value as? ImageRequest {
       super.writeByte(134)
       super.writeValue(value.toList())
-    } else if let value = value as? VideoProbe {
+    } else if let value = value as? CompressionReply {
       super.writeByte(135)
+      super.writeValue(value.toList())
+    } else if let value = value as? ImageProbe {
+      super.writeByte(136)
+      super.writeValue(value.toList())
+    } else if let value = value as? VideoProbe {
+      super.writeByte(137)
       super.writeValue(value.toList())
     } else {
       super.writeValue(value)
@@ -564,6 +693,7 @@ protocol MediaCompressorHostApi {
   func cancel(taskId: Int64) throws
   func probeImage(source: String, completion: @escaping (Result<ImageProbe?, Error>) -> Void)
   func probeVideo(source: String, completion: @escaping (Result<VideoProbe?, Error>) -> Void)
+  func videoThumbnail(request: ThumbnailRequest, completion: @escaping (Result<CompressionReply, Error>) -> Void)
 }
 
 /// Generated setup class from Pigeon to handle messages through the `binaryMessenger`.
@@ -655,6 +785,23 @@ class MediaCompressorHostApiSetup {
       }
     } else {
       probeVideoChannel.setMessageHandler(nil)
+    }
+    let videoThumbnailChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_media_compressor.MediaCompressorHostApi.videoThumbnail\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      videoThumbnailChannel.setMessageHandler { message, reply in
+        let args = message as! [Any?]
+        let requestArg = args[0] as! ThumbnailRequest
+        api.videoThumbnail(request: requestArg) { result in
+          switch result {
+          case .success(let res):
+            reply(wrapResult(res))
+          case .failure(let error):
+            reply(wrapError(error))
+          }
+        }
+      }
+    } else {
+      videoThumbnailChannel.setMessageHandler(nil)
     }
   }
 }

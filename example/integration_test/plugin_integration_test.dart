@@ -8,6 +8,13 @@ import 'support/test_files.dart' as files;
 
 final _isAndroid = !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
+final _isApple =
+    !kIsWeb &&
+    const [
+      TargetPlatform.iOS,
+      TargetPlatform.macOS,
+    ].contains(defaultTargetPlatform);
+
 /// Platforms whose system codecs must handle every common format. Elsewhere
 /// HEIC, WebP and some audio may legitimately be unsupported.
 final _fullCodecs =
@@ -292,7 +299,7 @@ void main() {
       }
     });
 
-    testWidgets('drops audio it cannot copy only when allowed', (_) async {
+    testWidgets('re-encodes audio it cannot copy to AAC', (_) async {
       final source = await _fixture('mp3_audio.mp4');
       final kept = _out('mp3-kept.mp4');
       final dropped = _out('mp3-dropped.mp4');
@@ -310,9 +317,25 @@ void main() {
             options: const VideoOptions(maxShortSide: 360, includeAudio: false),
           ).result;
 
-      // The web copies AAC only, like the platforms with full codecs.
-      if (_fullCodecs || kIsWeb) {
-        expect(withAudio.status, CompressionStatus.unsupported);
+      // Browsers encode AAC only where the system offers an encoder.
+      if (kIsWeb) {
+        expect(
+          withAudio.status,
+          anyOf(CompressionStatus.compressed, CompressionStatus.unsupported),
+        );
+      } else {
+        expect(
+          withAudio.status,
+          CompressionStatus.compressed,
+          reason: '$withAudio',
+        );
+      }
+      if (withAudio.isCompressed) {
+        final probe = await NativeMediaCompressor.probeVideo(
+          _at(withAudio, kept),
+        );
+        expect(probe!.audioCodec, 'audio/mp4a-latm');
+      } else {
         _expectAbsent(withAudio, kept);
       }
       expect(withoutAudio.status, CompressionStatus.compressed);
@@ -740,6 +763,267 @@ void main() {
         expect((result.width, result.height), sources[name], reason: name);
       }
       expect(await Future.wait(probes), everyElement(isNotNull));
+    });
+  });
+
+  group('video tools', () {
+    testWidgets('probe reports the frame rate', (_) async {
+      final probe = await NativeMediaCompressor.probeVideo(
+        await _fixture('h264_aac_1080p.mp4'),
+      );
+
+      expect(probe!.frameRate, closeTo(30, 0.5));
+    });
+
+    testWidgets('writes HEVC where the platform can, else H.264', (_) async {
+      final source = await _fixture('h264_aac_1080p.mp4');
+      final hevcPath = _out('codec-hevc.mp4');
+      final avcPath = _out('codec-avc.mp4');
+      final hevc =
+          await NativeMediaCompressor.compressVideo(
+            source: source,
+            destination: hevcPath,
+            options: const VideoOptions(codec: VideoCodec.hevc),
+          ).result;
+      final avc =
+          await NativeMediaCompressor.compressVideo(
+            source: source,
+            destination: avcPath,
+          ).result;
+
+      expect(hevc.status, CompressionStatus.compressed, reason: '$hevc');
+      expect(avc.videoCodec, 'video/avc');
+      if (_isAndroid || _isApple) expect(hevc.videoCodec, 'video/hevc');
+      expect(hevc.videoCodec, anyOf('video/hevc', 'video/avc'));
+      final probe = await NativeMediaCompressor.probeVideo(_at(hevc, hevcPath));
+      expect(probe!.videoCodec, hevc.videoCodec);
+      if (hevc.videoCodec == 'video/hevc') {
+        expect(hevc.sizeBytes, lessThan(avc.sizeBytes!));
+      }
+    });
+
+    testWidgets('keeps only the trimmed range', (_) async {
+      final destination = _out('trimmed.mp4');
+      final result =
+          await NativeMediaCompressor.compressVideo(
+            source: await _fixture('long_1080p.mp4'),
+            destination: destination,
+            options: const VideoOptions(
+              maxShortSide: 360,
+              trimStart: Duration(seconds: 2),
+              trimEnd: Duration(seconds: 5),
+            ),
+          ).result;
+
+      expect(result.status, CompressionStatus.compressed, reason: '$result');
+      final probe = await NativeMediaCompressor.probeVideo(
+        _at(result, destination),
+      );
+      expect(probe!.duration.inMilliseconds, closeTo(3000, 200));
+      expect(probe.hasAudio, isTrue);
+    });
+
+    testWidgets('a trim past the end keeps up to the end', (_) async {
+      final destination = _out('trimmed-tail.mp4');
+      final result =
+          await NativeMediaCompressor.compressVideo(
+            source: await _fixture('h264_aac_1080p.mp4'),
+            destination: destination,
+            options: const VideoOptions(
+              maxShortSide: 360,
+              trimStart: Duration(milliseconds: 1000),
+              trimEnd: Duration(seconds: 30),
+            ),
+          ).result;
+
+      expect(result.status, CompressionStatus.compressed, reason: '$result');
+      final probe = await NativeMediaCompressor.probeVideo(
+        _at(result, destination),
+      );
+      expect(probe!.duration.inMilliseconds, closeTo(1000, 200));
+    });
+
+    testWidgets('rotates by quarter turns', (_) async {
+      final destination = _out('rotated-turn.mp4');
+      final result =
+          await NativeMediaCompressor.compressVideo(
+            source: await _fixture('h264_aac_1080p.mp4'),
+            destination: destination,
+            options: const VideoOptions(
+              maxShortSide: 360,
+              rotateQuarterTurns: 1,
+            ),
+          ).result;
+
+      expect(result.status, CompressionStatus.compressed, reason: '$result');
+      expect((result.width, result.height), (360, 640));
+      final probe = await NativeMediaCompressor.probeVideo(
+        _at(result, destination),
+      );
+      expect((probe!.width, probe.height), (360, 640));
+    });
+
+    testWidgets('saves a frame as an image', (_) async {
+      final destination = _out('thumbnail.jpg');
+      final result = await NativeMediaCompressor.videoThumbnail(
+        source: await _fixture('h264_aac_1080p.mp4'),
+        destination: destination,
+        position: const Duration(seconds: 1),
+      );
+
+      expect(result.status, CompressionStatus.compressed, reason: '$result');
+      expect((result.width, result.height), (512, 288));
+      final probe = await NativeMediaCompressor.probeImage(
+        _at(result, destination),
+      );
+      expect((probe!.width, probe.height), (512, 288));
+      expect(probe.mimeType, 'image/jpeg');
+    });
+
+    testWidgets('a thumbnail keeps the displayed orientation', (_) async {
+      final destination = _out('thumbnail-rotated.png');
+      final result = await NativeMediaCompressor.videoThumbnail(
+        source: await _fixture('h264_rotated_90.mp4'),
+        destination: destination,
+        position: const Duration(seconds: 30),
+        options: const ImageOptions(maxLongSide: 320, format: ImageFormat.png),
+      );
+
+      expect(result.status, CompressionStatus.compressed, reason: '$result');
+      expect((result.width, result.height), (180, 320));
+    });
+
+    testWidgets('a thumbnail of a broken file leaves no output', (_) async {
+      final destination = _out('thumbnail-broken.jpg');
+      final result = await NativeMediaCompressor.videoThumbnail(
+        source: await _fixture('broken.jpg'),
+        destination: destination,
+      );
+
+      expect(
+        result.status,
+        anyOf(CompressionStatus.unsupported, CompressionStatus.failed),
+      );
+      _expectAbsent(result, destination);
+    });
+  });
+
+  group('presets and targets', () {
+    Future<int> outputSize(CompressionResult result, String destination) =>
+        files.sizeOf(_at(result, destination));
+
+    testWidgets('stronger presets give smaller files', (_) async {
+      final source = await _fixture('h264_aac_1080p.mp4');
+      final sizes = <int>[];
+      for (final (name, options) in [
+        ('strong', VideoOptions.strong),
+        ('balanced', VideoOptions.balanced),
+        ('light', VideoOptions.light),
+      ]) {
+        final destination = _out('preset-$name.mp4');
+        final result =
+            await NativeMediaCompressor.compressVideo(
+              source: source,
+              destination: destination,
+              options: options,
+            ).result;
+        expect(result.status, CompressionStatus.compressed, reason: name);
+        sizes.add(await outputSize(result, destination));
+      }
+
+      if (files.isIosSimulator) {
+        markTestSkipped('the simulator encoder ignores low bitrates');
+        return;
+      }
+      expect(sizes[0], lessThan(sizes[1]));
+      expect(sizes[1], lessThan(sizes[2]));
+    });
+
+    testWidgets('the estimate is close to the real output', (_) async {
+      final source = await _fixture('h264_aac_1080p.mp4');
+      final estimate = await NativeMediaCompressor.estimateVideo(source);
+      final destination = _out('estimated.mp4');
+      final result =
+          await NativeMediaCompressor.compressVideo(
+            source: source,
+            destination: destination,
+          ).result;
+
+      expect(result.status, CompressionStatus.compressed, reason: '$result');
+      expect((estimate!.width, estimate.height), (result.width, result.height));
+      if (files.isIosSimulator) {
+        markTestSkipped('the simulator encoder ignores low bitrates');
+        return;
+      }
+      final ratio = await outputSize(result, destination) / estimate.sizeBytes;
+      expect(ratio, inInclusiveRange(0.6, 1.5));
+    });
+
+    testWidgets('a video that cannot shrink enough is skipped', (_) async {
+      final destination = _out('not-worth-it.mp4');
+      files.writeText(destination, 'keep');
+
+      final result =
+          await NativeMediaCompressor.compressVideo(
+            source: await _fixture('long_1080p.mp4'),
+            destination: destination,
+            options: VideoOptions.light.copyWith(minSavingsPercent: 50),
+          ).result;
+
+      expect(result.status, CompressionStatus.skipped, reason: '$result');
+      expect(result.path, isNull);
+      if (!kIsWeb) expect(files.readText(destination), 'keep');
+    });
+
+    testWidgets('video lands near the target size', (_) async {
+      final destination = _out('target.mp4');
+      const target = 300000;
+      final result =
+          await NativeMediaCompressor.compressVideo(
+            source: await _fixture('h264_aac_1080p.mp4'),
+            destination: destination,
+            options: const VideoOptions(targetBytes: target),
+          ).result;
+
+      expect(result.status, CompressionStatus.compressed, reason: '$result');
+      if (files.isIosSimulator) {
+        markTestSkipped('the simulator encoder ignores low bitrates');
+        return;
+      }
+      expect(
+        await outputSize(result, destination),
+        inInclusiveRange(target * 0.5, target * 1.3),
+      );
+    });
+
+    testWidgets('an image fits the target size', (_) async {
+      final destination = _out('target.jpg');
+      const target = 40000;
+      final result = await NativeMediaCompressor.compressImage(
+        source: await _fixture('photo_exif_rotated.jpg'),
+        destination: destination,
+        options: const ImageOptions(targetBytes: target),
+      );
+
+      expect(result.status, CompressionStatus.compressed, reason: '$result');
+      expect(result.sizeBytes, lessThanOrEqualTo(target));
+      expect(await outputSize(result, destination), result.sizeBytes);
+    });
+
+    testWidgets('compresses an image held in memory', (_) async {
+      final bytes = await files.bytesOf(
+        await _fixture('photo_exif_rotated.jpg'),
+      );
+
+      final result = await NativeMediaCompressor.compressImageBytes(
+        bytes,
+        options: const ImageOptions(maxLongSide: 800),
+      );
+
+      expect(result.status, CompressionStatus.compressed, reason: '$result');
+      expect((result.width, result.height), (600, 800));
+      expect(result.bytes!.length, lessThan(bytes.length));
+      expect(result.bytes!.sublist(0, 3), [0xFF, 0xD8, 0xFF]);
     });
   });
 
