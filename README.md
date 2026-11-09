@@ -10,10 +10,11 @@
 
 Compress images and videos in Flutter with the codecs the platform already ships. No ffmpeg, no bundled encoders: the package adds only its own code to your app, and the encoding runs on the system's codecs, hardware-accelerated where the device has them.
 
-- **Video** to H.264 in MP4: scale down, cap the frame rate and bitrate, stop early at a size limit, report progress, cancel.
+- **Presets instead of knobs:** pick `light`, `balanced` or `strong`, and the bitrate follows the frame size and stays below the source's, so the output never grows past the original.
+- **Video** to H.264 in MP4: scale down, cap the frame rate, aim at a target size, stop early at a size limit, report progress, cancel.
 - **Images** to JPEG or PNG: scale down, apply EXIF orientation, strip metadata. HEIC, WebP and animated inputs are read where the platform can decode them.
 - **Probe** size, rotation, duration, codecs, HDR and frame count from the headers, without decoding, to decide whether compression is worth it.
-- **Results instead of exceptions.** Every call ends with a status, and a failed call never touches the destination file.
+- **Results instead of exceptions.** Every call ends with a status, and a failed call never touches the destination file. An output that saves too little can be dropped in favour of the original.
 
 ## Why the platform's codecs
 
@@ -90,7 +91,7 @@ import 'package:native_media_compressor/native_media_compressor.dart';
 final task = NativeMediaCompressor.compressVideo(
   source: '/path/to/input.mov',
   destination: '/path/to/output.mp4',
-  options: const VideoOptions(maxShortSide: 720, videoBitrate: 2500000),
+  options: VideoOptions.balanced,
 );
 
 task.progress.listen((fraction) => print('${(fraction * 100).round()}%'));
@@ -111,11 +112,64 @@ if (result.isCompressed) {
 final result = await NativeMediaCompressor.compressImage(
   source: '/path/to/photo.heic',
   destination: '/path/to/photo.jpg',
-  options: const ImageOptions(maxLongSide: 2048, quality: 85),
+  options: ImageOptions.strong,
 );
 ```
 
-Images and probes run in parallel.
+Images and probes run in parallel. An image already in memory, such as a camera frame or a download, goes through `compressImageBytes` and comes back as bytes, with no files of your own to manage:
+
+```dart
+final result = await NativeMediaCompressor.compressImageBytes(bytes);
+final jpeg = result.bytes;
+```
+
+### Pick a preset
+
+| Preset | Video | Images |
+|---|---|---|
+| `light` | up to 1080p, 60 fps, 0.1 bits per pixel | long side up to 2560, JPEG 90 |
+| `balanced`, the default | up to 720p, 30 fps, 0.07 bits per pixel | long side up to 2048, JPEG 85 |
+| `strong` | up to 480p, 30 fps, 0.05 bits per pixel | long side up to 1280, JPEG 75 |
+
+The video bitrate is the frame size times the frame rate times the bits per pixel, so a 720p output gets about 1.9 Mbit/s and a 480p one about 0.6 Mbit/s. It never goes above 85% of the source's own video bitrate: re-encoding at the source bitrate would lose quality without saving space. Any field can be changed on top of a preset:
+
+```dart
+final options = VideoOptions.strong.copyWith(maxBytes: 25 * 1024 * 1024);
+```
+
+### Hit a target size
+
+Ask for a size, and the video bitrate is derived from the duration, leaving room for the copied audio:
+
+```dart
+NativeMediaCompressor.compressVideo(
+  source: source,
+  destination: destination,
+  options: const VideoOptions(targetBytes: 10 * 1024 * 1024),
+);
+```
+
+Encoders land within a few percent of the target; add `maxBytes` when the size is a hard limit, such as an upload cap. For images, `ImageOptions.targetBytes` lowers JPEG quality and then the image size until the output fits, in at most eight encodes.
+
+### Keep the original when compression does not pay off
+
+```dart
+const options = VideoOptions(minSavingsPercent: 20);
+```
+
+An output that is not at least 20% smaller than the source is dropped and the call returns `CompressionStatus.skipped`; `destination` stays as it was. `0` drops only outputs that are not smaller at all.
+
+### Estimate before compressing
+
+`estimateVideo` tells the output size, frame and bitrate from the headers alone, for a "this will be about 12 MB" hint before the user commits:
+
+```dart
+final estimate = await NativeMediaCompressor.estimateVideo(
+  source,
+  options: VideoOptions.strong,
+);
+print('about ${estimate?.sizeBytes} bytes at ${estimate?.width}x${estimate?.height}');
+```
 
 ### Probe before compressing
 
@@ -149,12 +203,16 @@ await NativeMediaCompressor.compressImage(source: path, destination: path);
 |---|---|---|
 | `maxShortSide` | `720` | Upper bound for the shorter side, in pixels. |
 | `maxLongSide` | `null` | Upper bound for the longer side, in pixels. |
-| `videoBitrate` | `2500000` | Target bitrate, in bits per second. |
+| `targetBytes` | `null` | Desired output size; the video bitrate is derived from it. |
+| `videoBitrate` | `null` | Video bitrate, in bits per second. |
+| `qualityPercent` | `null` | Video bitrate as a percentage of the source's. |
+| `bitsPerPixel` | `0.07` | Bitrate per pixel per frame when none of the three above is set. |
 | `maxFrameRate` | `30` | Frames above this rate are dropped. Capped at 240. |
 | `maxBytes` | `null` | Stop with `tooLarge` as soon as the output exceeds this size. |
+| `minSavingsPercent` | `null` | Drop an output that is not this much smaller than the source, with `skipped`. |
 | `includeAudio` | `true` | Keep the audio tracks. Non-AAC audio is `unsupported` unless this is `false`. |
 
-The frame is scaled down to fit both bounds, keeping its aspect ratio, and never scaled up.
+The frame is scaled down to fit both bounds, keeping its aspect ratio, and never scaled up. The bitrate comes from the first of `targetBytes`, `videoBitrate` and `qualityPercent` that is set, then from `bitsPerPixel`, and stays below 85% of the source video bitrate.
 
 ### `ImageOptions`
 
@@ -164,6 +222,8 @@ The frame is scaled down to fit both bounds, keeping its aspect ratio, and never
 | `maxLongSide` | `2048` | Upper bound for the longer side, in pixels. |
 | `format` | `ImageFormat.jpeg` | `jpeg` or `png`. |
 | `quality` | `85` | JPEG quality from 0 to 100; ignored for PNG. |
+| `targetBytes` | `null` | Desired output size; quality, then size, go down until it fits. |
+| `minSavingsPercent` | `null` | Drop an output that is not this much smaller than the source, with `skipped`. |
 
 ## Results instead of exceptions
 
@@ -177,6 +237,7 @@ Compression never throws on bad input or a missing codec. Check `CompressionResu
 | `cancelled` | `CompressionTask.cancel()` was called. |
 | `interrupted` | The system stopped the work, for example in the background. Retrying usually works. |
 | `failed` | The input is unreadable or a codec failed; `message` has details. |
+| `skipped` | The output did not save `minSavingsPercent`; keep the original. |
 
 Every status except `compressed` leaves `destination` as it was.
 
