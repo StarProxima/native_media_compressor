@@ -20,6 +20,13 @@ Future<String> fixture(String name) async {
 /// The web ignores destinations; results point to object URLs instead.
 String outputPath(String name) => 'out-$name';
 
+Future<Uint8List> bytesOf(String location) async {
+  final response = await web.window.fetch(location.toJS).toDart;
+  final buffer = await response.arrayBuffer().toDart;
+
+  return buffer.toDart.asUint8List();
+}
+
 Future<int> sizeOf(String location) async {
   final response = await web.window.fetch(location.toJS).toDart;
   final blob = await response.blob().toDart;

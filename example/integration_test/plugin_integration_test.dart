@@ -743,6 +743,117 @@ void main() {
     });
   });
 
+  group('presets and targets', () {
+    Future<int> outputSize(CompressionResult result, String destination) =>
+        files.sizeOf(_at(result, destination));
+
+    testWidgets('stronger presets give smaller files', (_) async {
+      final source = await _fixture('h264_aac_1080p.mp4');
+      final sizes = <int>[];
+      for (final (name, options) in [
+        ('strong', VideoOptions.strong),
+        ('balanced', VideoOptions.balanced),
+        ('light', VideoOptions.light),
+      ]) {
+        final destination = _out('preset-$name.mp4');
+        final result =
+            await NativeMediaCompressor.compressVideo(
+              source: source,
+              destination: destination,
+              options: options,
+            ).result;
+        expect(result.status, CompressionStatus.compressed, reason: name);
+        sizes.add(await outputSize(result, destination));
+      }
+
+      expect(sizes[0], lessThan(sizes[1]));
+      expect(sizes[1], lessThan(sizes[2]));
+      expect(sizes[2], lessThan(await files.sizeOf(source)));
+    });
+
+    testWidgets('the estimate is close to the real output', (_) async {
+      final source = await _fixture('h264_aac_1080p.mp4');
+      final estimate = await NativeMediaCompressor.estimateVideo(source);
+      final destination = _out('estimated.mp4');
+      final result =
+          await NativeMediaCompressor.compressVideo(
+            source: source,
+            destination: destination,
+          ).result;
+
+      expect(result.status, CompressionStatus.compressed, reason: '$result');
+      expect((estimate!.width, estimate.height), (result.width, result.height));
+      final ratio = await outputSize(result, destination) / estimate.sizeBytes;
+      expect(ratio, inInclusiveRange(0.6, 1.5));
+    });
+
+    testWidgets('a video that cannot shrink enough is skipped', (_) async {
+      final destination = _out('not-worth-it.mp4');
+      files.writeText(destination, 'keep');
+
+      final result =
+          await NativeMediaCompressor.compressVideo(
+            source: await _fixture('long_1080p.mp4'),
+            destination: destination,
+            options: VideoOptions.light.copyWith(minSavingsPercent: 50),
+          ).result;
+
+      expect(result.status, CompressionStatus.skipped, reason: '$result');
+      expect(result.path, isNull);
+      if (!kIsWeb) expect(files.readText(destination), 'keep');
+    });
+
+    testWidgets('video lands near the target size', (_) async {
+      final destination = _out('target.mp4');
+      const target = 300000;
+      final result =
+          await NativeMediaCompressor.compressVideo(
+            source: await _fixture('h264_aac_1080p.mp4'),
+            destination: destination,
+            options: const VideoOptions(
+              maxShortSide: 1080,
+              targetBytes: target,
+            ),
+          ).result;
+
+      expect(result.status, CompressionStatus.compressed, reason: '$result');
+      expect(
+        await outputSize(result, destination),
+        inInclusiveRange(target * 0.5, target * 1.3),
+      );
+    });
+
+    testWidgets('an image fits the target size', (_) async {
+      final destination = _out('target.jpg');
+      const target = 40000;
+      final result = await NativeMediaCompressor.compressImage(
+        source: await _fixture('photo_exif_rotated.jpg'),
+        destination: destination,
+        options: const ImageOptions(targetBytes: target),
+      );
+
+      expect(result.status, CompressionStatus.compressed, reason: '$result');
+      expect(result.sizeBytes, lessThanOrEqualTo(target));
+      expect(await outputSize(result, destination), result.sizeBytes);
+    });
+
+    testWidgets('compresses an image held in memory', (_) async {
+      final bytes = await files.bytesOf(
+        await _fixture('photo_exif_rotated.jpg'),
+      );
+
+      final result = await NativeMediaCompressor.compressImageBytes(
+        bytes,
+        options: const ImageOptions(maxLongSide: 800),
+      );
+
+      expect(result.status, CompressionStatus.compressed, reason: '$result');
+      expect((result.width, result.height), (600, 800));
+      expect(result.bytes!.length, lessThan(bytes.length));
+      expect(result.bytes!.sublist(0, 3), [0xFF, 0xD8, 0xFF]);
+    });
+  });
+
   group('formats', () {
     testWidgets('compresses the video formats the readme lists', (_) async {
       final problems = <String>[];

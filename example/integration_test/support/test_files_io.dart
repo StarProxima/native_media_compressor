@@ -25,6 +25,8 @@ String outputPath(String name) => '${_work.path}/out-$name';
 
 Future<int> sizeOf(String location) async => File(location).lengthSync();
 
+Future<Uint8List> bytesOf(String location) => File(location).readAsBytes();
+
 bool exists(String path) => File(path).existsSync();
 
 void writeText(String path, String text) => File(path).writeAsStringSync(text);
