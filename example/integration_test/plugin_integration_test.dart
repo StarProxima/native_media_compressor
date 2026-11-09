@@ -937,7 +937,6 @@ void main() {
       }
       expect(sizes[0], lessThan(sizes[1]));
       expect(sizes[1], lessThan(sizes[2]));
-      expect(sizes[2], lessThan(await files.sizeOf(source)));
     });
 
     testWidgets('the estimate is close to the real output', (_) async {

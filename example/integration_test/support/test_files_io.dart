@@ -9,7 +9,7 @@ late Directory _work;
 /// not go below about 1.5 Mbit/s at 1080p, so sizes there do not follow the
 /// requested bitrate.
 bool get isIosSimulator =>
-    Platform.isIOS && Platform.environment.containsKey('SIMULATOR_DEVICE_NAME');
+    Platform.isIOS && Platform.resolvedExecutable.contains('/CoreSimulator/');
 
 Future<void> setUpFiles() async {
   final temp = await getTemporaryDirectory();

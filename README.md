@@ -10,7 +10,7 @@
 
 Compress images and videos in Flutter with the codecs the platform already ships. No ffmpeg, no bundled encoders: the package adds only its own code to your app, and the encoding runs on the system's codecs, hardware-accelerated where the device has them.
 
-- **Presets instead of knobs:** pick `light`, `balanced` or `strong`, and the bitrate follows the frame size and stays below the source's, so the output never grows past the original.
+- **Presets instead of knobs:** pick `light`, `balanced` or `strong`, and the bitrate follows the frame size and stays below the source's. Add `minSavingsPercent` and an output that is not smaller enough is dropped in favour of the original.
 - **Video** to H.264 or HEVC in MP4: scale down, cap the frame rate, trim, rotate, aim at a target size, stop early at a size limit, report progress, cancel. AAC audio is copied, any other audio is re-encoded to AAC.
 - **Thumbnails:** save any frame of a video as JPEG or PNG.
 - **Images** to JPEG or PNG: scale down, apply EXIF orientation, strip metadata. HEIC, WebP and animated inputs are read where the platform can decode them.
@@ -144,7 +144,7 @@ final jpeg = result.bytes;
 | `balanced`, the default | up to 720p, 30 fps, 0.07 bits per pixel | long side up to 2048, JPEG 85 |
 | `strong` | up to 480p, 30 fps, 0.05 bits per pixel | long side up to 1280, JPEG 75 |
 
-The video bitrate is the frame size times the frame rate times the bits per pixel, so a 720p output gets about 1.9 Mbit/s and a 480p one about 0.6 Mbit/s. It never goes above 85% of the source's own video bitrate: re-encoding at the source bitrate would lose quality without saving space. Any field can be changed on top of a preset:
+The video bitrate is the frame size times the frame rate times the bits per pixel, so a 720p output gets about 1.9 Mbit/s and a 480p one about 0.6 Mbit/s. It never goes above 85% of the source's own video bitrate: re-encoding at the source bitrate would lose quality without saving space. Encoders do not always keep to the bitrate, especially on very short clips, so a re-encode can still come out larger than the source; `minSavingsPercent: 0` guarantees it never does. Any field can be changed on top of a preset:
 
 ```dart
 final options = VideoOptions.strong.copyWith(maxBytes: 25 * 1024 * 1024);
