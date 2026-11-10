@@ -19,6 +19,9 @@
 * iOS and macOS: box sizes and chunk offsets of a malformed MP4 can no longer
   overflow while audio is read from the container, and video settings the
   writer rejects answer `unsupported` instead of raising.
+* Linux: the build takes the GStreamer headers only from 1.20 on, which the
+  code needs; older headers now give the no-video build instead of a compile
+  error. Replies and progress are always queued on the main loop.
 * Documentation: `targetBytes` needs a readable duration, `minSavingsPercent`
   needs the source size (an Android `content://` source is always kept),
   which `ImageOptions` fields `videoThumbnail` uses, the Android service in

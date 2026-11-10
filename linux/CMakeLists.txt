@@ -14,10 +14,13 @@ set(PLUGIN_NAME "native_media_compressor_plugin")
 find_package(PkgConfig REQUIRED)
 find_package(Threads REQUIRED)
 # GStreamer headers are only needed at build time: the libraries are loaded
-# with dlopen. Without the headers, video calls answer unsupported.
-pkg_check_modules(NMC_GST QUIET gstreamer-1.0 gstreamer-pbutils-1.0 gstreamer-video-1.0)
+# with dlopen. Without the headers, video calls answer unsupported. The
+# plugin declares functions that exist since 1.20, so older headers would
+# break the build instead of taking that path.
+pkg_check_modules(NMC_GST QUIET
+  gstreamer-1.0>=1.20 gstreamer-pbutils-1.0>=1.20 gstreamer-video-1.0>=1.20)
 if(NOT NMC_GST_FOUND)
-  message(WARNING "native_media_compressor: GStreamer development headers not found; "
+  message(WARNING "native_media_compressor: GStreamer 1.20+ development headers not found; "
     "video compression will report unsupported. Install libgstreamer1.0-dev and "
     "libgstreamer-plugins-base1.0-dev to enable it.")
 endif()

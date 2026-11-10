@@ -39,10 +39,12 @@ std::shared_ptr<T> Retain(T* object) {
 }
 
 // Replies and Flutter API calls must be made on the main context, which is
-// where the engine runs the platform thread.
+// where the engine runs the platform thread. g_idle_add always queues there;
+// g_main_context_invoke would run the task right here whenever the worker
+// can acquire the context, such as while the main loop is not running.
 void PostToMain(std::function<void()> task) {
-  g_main_context_invoke_full(
-      nullptr, G_PRIORITY_DEFAULT,
+  g_idle_add_full(
+      G_PRIORITY_DEFAULT,
       [](gpointer data) -> gboolean {
         try {
           (*static_cast<std::function<void()>*>(data))();
