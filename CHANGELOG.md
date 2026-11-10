@@ -16,6 +16,9 @@
   also looked up among mipmaps.
 * Android: a codec that is busy or reclaimed answers `interrupted`, not
   `unsupported`, so the app knows to retry.
+* iOS and macOS: box sizes and chunk offsets of a malformed MP4 can no longer
+  overflow while audio is read from the container, and video settings the
+  writer rejects answer `unsupported` instead of raising.
 * Documentation: `targetBytes` needs a readable duration, `minSavingsPercent`
   needs the source size (an Android `content://` source is always kept),
   which `ImageOptions` fields `videoThumbnail` uses, the Android service in

@@ -109,8 +109,10 @@ final class VideoTranscoder {
     // no pixel has to move.
     let transform = MediaAsset.orientation(
       video.transform, turnedBy: Int(request.rotateQuarterTurns), size: frame)
-    let (videoSettings, codec) = Self.videoSettings(
-      width: width, height: height, frameRate: frameRate, request: request, writer: writer)
+    guard
+      let (videoSettings, codec) = Self.videoSettings(
+        width: width, height: height, frameRate: frameRate, request: request, writer: writer)
+    else { return .status(.unsupported, "cannot encode video") }
     let videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
     videoInput.transform = transform
     videoInput.expectsMediaDataInRealTime = false
@@ -256,10 +258,11 @@ final class VideoTranscoder {
   }
 
   /// Writer settings for the requested codec and the MIME type of the codec
-  /// they select. HEVC falls back to H.264 where the system cannot encode it.
+  /// they select. HEVC falls back to H.264 where the system cannot encode it;
+  /// nil when the writer takes neither.
   private static func videoSettings(
     width: Int, height: Int, frameRate: Double, request: VideoRequest, writer: AVAssetWriter
-  ) -> ([String: Any], String) {
+  ) -> ([String: Any], String)? {
     func settings(_ codec: AVVideoCodecType, profile: String, limitsRate: Bool) -> [String: Any] {
       var compression: [String: Any] = [
         AVVideoAverageBitRateKey: request.videoBitrate,
@@ -301,11 +304,10 @@ final class VideoTranscoder {
     #else
       let profile = AVVideoProfileLevelH264HighAutoLevel
     #endif
-    return (
-      firstApplicable(.h264, profile: profile)
-        ?? settings(.h264, profile: profile, limitsRate: false),
-      "video/avc"
-    )
+    // Settings the writer rejects would make the input initializer raise an
+    // Objective-C exception, so nothing is built from them.
+    guard let h264 = firstApplicable(.h264, profile: profile) else { return nil }
+    return (h264, "video/avc")
   }
 
   /// `kVTCompressionPropertyKey_DataRateLimits`: at most 1.5 times the
