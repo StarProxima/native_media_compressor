@@ -19,6 +19,10 @@ class _FakePlatform extends NativeMediaCompressorPlatform
 
   set videoSize(int size) => videoSizeFor = (_) => size;
 
+  /// Runs before the result of the video request with this index is
+  /// produced, so a test can cancel at a chosen moment.
+  Future<void> Function(int index)? beforeVideoResult;
+
   VideoMetadata? metadata;
   final imageRequests = <(String, ImageOptions)>[];
   final videoRequests = <(String, VideoOptions)>[];
@@ -48,20 +52,29 @@ class _FakePlatform extends NativeMediaCompressorPlatform
     required String destination,
     required VideoOptions options,
   }) {
+    final index = videoRequests.length;
     videoRequests.add((destination, options));
-    final size = videoSizeFor(options);
-    File(destination).writeAsBytesSync(Uint8List(size));
+    var isCancelled = false;
+
+    Future<CompressionResult> run() async {
+      await beforeVideoResult?.call(index);
+      if (isCancelled) {
+        return const CompressionResult(status: CompressionStatus.cancelled);
+      }
+      final size = videoSizeFor(options);
+      File(destination).writeAsBytesSync(Uint8List(size));
+
+      return CompressionResult(
+        status: CompressionStatus.compressed,
+        path: destination,
+        sizeBytes: size,
+      );
+    }
 
     return CompressionTask(
-      result: Future.value(
-        CompressionResult(
-          status: CompressionStatus.compressed,
-          path: destination,
-          sizeBytes: size,
-        ),
-      ),
+      result: run(),
       progress: const Stream.empty(),
-      onCancel: () async {},
+      onCancel: () async => isCancelled = true,
     );
   }
 
@@ -288,6 +301,35 @@ void main() {
     expect(result.sizeBytes, lessThanOrEqualTo(1000000));
     expect(File(destination).lengthSync(), result.sizeBytes);
     expect(entries(), ['in.mp4', 'out.mp4']);
+  });
+
+  test('a cancel during the second pass leaves nothing behind', () async {
+    platform.metadata = const VideoMetadata(
+      width: 1920,
+      height: 1080,
+      rotationDegrees: 0,
+      duration: Duration(seconds: 10),
+      hasAudio: false,
+      isHdr: false,
+      bitrate: 50000000,
+    );
+    platform.videoSizeFor = (options) => options.videoBitrate! * 10 ~/ 8 * 2;
+    late CompressionTask task;
+    platform.beforeVideoResult = (index) async {
+      if (index == 1) await task.cancel();
+    };
+
+    task = NativeMediaCompressor.compressVideo(
+      source: file('in.mp4', 10),
+      destination: file('out.mp4'),
+      options: const VideoOptions(targetBytes: 1000000),
+    );
+    final result = await task.result;
+
+    expect(platform.videoRequests, hasLength(2));
+    expect(result.status, CompressionStatus.cancelled);
+    expect(result.path, isNull);
+    expect(entries(), ['in.mp4']);
   });
 
   test('estimate follows the probe', () async {

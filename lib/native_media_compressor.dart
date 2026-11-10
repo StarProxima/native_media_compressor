@@ -138,6 +138,10 @@ abstract final class NativeMediaCompressor {
   /// Saves the frame at [position] of the video at [source] as an image at
   /// [destination], scaled down to fit [options] like [compressImage].
   ///
+  /// Of [options] only the size bounds, [ImageOptions.format] and
+  /// [ImageOptions.quality] apply; a frame has no metadata to keep and no
+  /// source size to compare with, so the other fields are ignored.
+  ///
   /// A [position] past the end gives the last frame. On the web the result
   /// points to an object URL.
   static Future<CompressionResult> videoThumbnail({
@@ -364,6 +368,13 @@ final class _VideoJob {
       result = await _closer(result, retry, targetBytes);
     }
     if (!isStaged || !result.isCompressed) return result;
+    // A cancel between passes, or during the second one, must not turn the
+    // first pass into a finished compression.
+    if (_isCancelled) {
+      await StagedFiles.discard(result.path);
+
+      return const CompressionResult(status: CompressionStatus.cancelled);
+    }
 
     return NativeMediaCompressor._keep(
       result,
