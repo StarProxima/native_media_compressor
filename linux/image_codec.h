@@ -24,6 +24,7 @@ struct ImageInfo {
   int64_t height = 0;
   int64_t frame_count = 1;
   std::string mime_type;
+  std::optional<int64_t> size_bytes;
 };
 
 // Reads the displayed size, frame count and MIME type from the file header.

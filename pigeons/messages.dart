@@ -152,6 +152,9 @@ class ImageProbe {
   int height;
   int frameCount;
   String? mimeType;
+
+  /// Size of the source in bytes, when the platform can tell.
+  int? sizeBytes;
 }
 
 class VideoProbe {
@@ -177,6 +180,12 @@ class VideoProbe {
   /// Average frames per second of the video track, when the container
   /// reports it.
   double? frameRate;
+
+  /// Number of audio tracks the container has.
+  int? audioTrackCount;
+
+  /// Size of the source in bytes, when the platform can tell.
+  int? sizeBytes;
 }
 
 @HostApi()

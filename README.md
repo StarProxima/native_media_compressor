@@ -15,7 +15,7 @@ Compress images and videos in Flutter with the codecs the platform already ships
 - **Thumbnails:** save any frame of a video as an image.
 - **Images** to JPEG, PNG, WebP or HEIC: scale down, apply EXIF orientation, strip metadata or keep it on request. HEIC, WebP and animated inputs are read where the platform can decode them.
 - **Background work:** an optional Android foreground service, and on iOS the system's background time to finish a running video.
-- **Probe** size, rotation, duration, codecs, HDR and frame count from the headers, without decoding, to decide whether compression is worth it.
+- **Probe** size, rotation, duration, codecs, audio tracks, HDR, frame count and file size from the headers, without decoding, to decide whether compression is worth it.
 - **Results instead of exceptions.** Every call ends with a status, and a failed call never touches the destination file. An output that saves too little can be dropped in favour of the original.
 
 ## Why the platform's codecs
@@ -77,7 +77,7 @@ Video becomes H.264, or HEVC where the platform has an encoder and you ask for i
 |---|---|---|---|
 | Android | MP4, MOV, M4V, 3GP, MKV, WebM | H.264, HEVC, VP8, VP9, AV1, as far as the device has decoders; AV1 is on most Android 10+ devices | AAC copied, other codecs re-encoded to AAC |
 | iOS, macOS | MP4, MOV, M4V, 3GP; not MKV or WebM | H.264, HEVC; AV1 only with a hardware decoder (A17 Pro, M3 and newer); not VP8 or VP9 | AAC copied, other codecs re-encoded to AAC |
-| Windows | MP4, MOV, M4V, 3GP, MKV | H.264 built in; HEVC, VP8, VP9 and AV1 with the matching Microsoft Store extensions | Re-encoded to AAC at 44.1 or 48 kHz, mono or stereo; one audio track |
+| Windows | MP4, MOV, M4V, 3GP, MKV | H.264 built in; HEVC, VP8, VP9 and AV1 with the matching Microsoft Store extensions | Re-encoded to AAC at 44.1 or 48 kHz, mono or stereo; the first audio track is kept |
 | Linux | Whatever the installed GStreamer plugins open; with the packages from Platform notes MP4, MOV, M4V, 3GP, MKV, WebM | Whatever the installed decoders handle; with those packages H.264, HEVC, VP8, VP9, AV1 | AAC copied, other codecs re-encoded to AAC |
 | Web | MP4, MOV, M4V, 3GP, not fragmented; not MKV or WebM | Whatever the browser's WebCodecs decodes: H.264 everywhere; VP9 and AV1 in current Chrome, Edge and Firefox; HEVC where the device decodes it in hardware | AAC copied; other codecs re-encoded where the browser has an AAC encoder |
 
@@ -203,7 +203,7 @@ Encoders do not always keep to the requested bitrate, so when the output misses 
 const options = VideoOptions(minSavingsPercent: 20);
 ```
 
-An output that is not at least 20% smaller than the source is dropped and the call returns `CompressionStatus.skipped`; `destination` stays as it was. `0` drops only outputs that are not smaller at all. The rule needs the source size, so an Android `content://` source is always kept.
+An output that is not at least 20% smaller than the source is dropped and the call returns `CompressionStatus.skipped`; `destination` stays as it was. `0` drops only outputs that are not smaller at all. The rule needs the source size: for an Android `content://` source it comes from the content provider, and a source whose size nobody reports is always kept.
 
 ### Trim, rotate and pick the codec
 
@@ -321,6 +321,7 @@ Every status except `compressed` leaves `destination` as it was.
 ## What the output looks like
 
 - **Video:** SDR H.264 or HEVC in MP4, scaled down to fit `maxShortSide` and `maxLongSide`. The displayed orientation is kept, plus `rotateQuarterTurns`. AAC audio is copied without re-encoding, other audio is re-encoded to AAC; on Windows all audio is re-encoded to AAC, resampled to 44.1 or 48 kHz and downmixed to stereo where needed. Frames above `maxFrameRate` are dropped.
+- **Several audio tracks**, such as a screen recording with system sound and a microphone, are all kept. A track the platform cannot decode, such as AC-3 on Android or in Chrome, is dropped as long as another track is kept; only a file with no track left is `unsupported`. iOS and macOS keep one track of each alternate group, the way a player picks one of them; Windows keeps the first track.
 - **HDR video** (HLG, PQ, Dolby Vision, as phone cameras record by default) is tone-mapped to SDR on Android 7+ when the device decodes the source profile, on iOS 14+, macOS 11+ and in the browser. On Windows and Linux it is `unsupported` for now.
 - **Images:** JPEG, PNG, WebP or HEIC, scaled down to fit both bounds, with EXIF orientation applied to the pixels and no metadata copied unless `keepMetadata` asks for it. Animated images keep the first frame. JPEG output of an image with transparency is flattened onto white.
 

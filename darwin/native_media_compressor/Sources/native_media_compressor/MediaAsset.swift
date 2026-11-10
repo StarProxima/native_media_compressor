@@ -125,7 +125,8 @@ struct MediaAsset {
   }
 
   static func probe(_ path: String) async -> VideoProbe? {
-    let asset = AVURLAsset(url: URL(fileURLWithPath: path))
+    let url = URL(fileURLWithPath: path)
+    let asset = AVURLAsset(url: url)
     guard let media = try? await load(asset), let video = media.video else { return nil }
     let size = video.displaySize
     guard size.width > 0, size.height > 0 else { return nil }
@@ -142,7 +143,9 @@ struct MediaAsset {
       hasAudio: !media.audio.isEmpty || !media.unreadableAudio.isEmpty,
       audioCodec: media.audioPlan.firstCodec ?? media.audio.first?.codec
         ?? media.unreadableAudio.first?.codec,
-      frameRate: video.nominalFrameRate > 0 ? Double(video.nominalFrameRate) : nil)
+      frameRate: video.nominalFrameRate > 0 ? Double(video.nominalFrameRate) : nil,
+      audioTrackCount: Int64(Set(media.audio.map(\.id) + media.containerAudio.map(\.id)).count),
+      sizeBytes: url.knownFileSize)
   }
 
   static func displaySize(_ size: CGSize, _ transform: CGAffineTransform) -> CGSize {

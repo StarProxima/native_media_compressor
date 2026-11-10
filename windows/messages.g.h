@@ -443,7 +443,8 @@ class ImageProbe {
     int64_t width,
     int64_t height,
     int64_t frame_count,
-    const std::string* mime_type);
+    const std::string* mime_type,
+    const int64_t* size_bytes);
 
   int64_t width() const;
   void set_width(int64_t value_arg);
@@ -457,6 +458,11 @@ class ImageProbe {
   const std::string* mime_type() const;
   void set_mime_type(const std::string_view* value_arg);
   void set_mime_type(std::string_view value_arg);
+
+  // Size of the source in bytes, when the platform can tell.
+  const int64_t* size_bytes() const;
+  void set_size_bytes(const int64_t* value_arg);
+  void set_size_bytes(int64_t value_arg);
 
   bool operator==(const ImageProbe& other) const;
   bool operator!=(const ImageProbe& other) const;
@@ -472,6 +478,7 @@ class ImageProbe {
   int64_t height_;
   int64_t frame_count_;
   std::optional<std::string> mime_type_;
+  std::optional<int64_t> size_bytes_;
 };
 
 
@@ -498,7 +505,9 @@ class VideoProbe {
     bool is_hdr,
     bool has_audio,
     const std::string* audio_codec,
-    const double* frame_rate);
+    const double* frame_rate,
+    const int64_t* audio_track_count,
+    const int64_t* size_bytes);
 
   int64_t width() const;
   void set_width(int64_t value_arg);
@@ -536,6 +545,16 @@ class VideoProbe {
   void set_frame_rate(const double* value_arg);
   void set_frame_rate(double value_arg);
 
+  // Number of audio tracks the container has.
+  const int64_t* audio_track_count() const;
+  void set_audio_track_count(const int64_t* value_arg);
+  void set_audio_track_count(int64_t value_arg);
+
+  // Size of the source in bytes, when the platform can tell.
+  const int64_t* size_bytes() const;
+  void set_size_bytes(const int64_t* value_arg);
+  void set_size_bytes(int64_t value_arg);
+
   bool operator==(const VideoProbe& other) const;
   bool operator!=(const VideoProbe& other) const;
   /// Returns a hash code value for the object. This method is supported for the benefit of hash tables.
@@ -556,6 +575,8 @@ class VideoProbe {
   bool has_audio_;
   std::optional<std::string> audio_codec_;
   std::optional<double> frame_rate_;
+  std::optional<int64_t> audio_track_count_;
+  std::optional<int64_t> size_bytes_;
 };
 
 

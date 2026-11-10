@@ -10,6 +10,8 @@ import 'support/test_files.dart' as files;
 
 final _isAndroid = !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
+final _isWindows = !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
+
 final _isApple =
     !kIsWeb &&
     const [
@@ -281,27 +283,54 @@ void main() {
       expect(probe!.videoCodec, 'video/avc');
     });
 
-    testWidgets('copies or rejects several audio tracks', (_) async {
+    testWidgets('keeps every audio track it can', (_) async {
+      final source = await _fixture('two_audio_tracks.mp4');
       final destination = _out('two-audio.mp4');
       final result =
           await NativeMediaCompressor.compressVideo(
-            source: await _fixture('two_audio_tracks.mp4'),
+            source: source,
             destination: destination,
             options: const VideoOptions(maxShortSide: 360),
           ).result;
 
-      if (_fullCodecs) {
-        expect(result.status, CompressionStatus.compressed, reason: '$result');
-        final probe = await NativeMediaCompressor.probeVideo(
-          _at(result, destination),
-        );
-        expect(probe!.hasAudio, isTrue);
-      } else {
-        expect(
-          result.status,
-          anyOf(CompressionStatus.compressed, CompressionStatus.unsupported),
-        );
-      }
+      expect(result.status, CompressionStatus.compressed, reason: '$result');
+      final input = await NativeMediaCompressor.probeVideo(source);
+      expect(input!.audioTrackCount, 2);
+      final probe = await NativeMediaCompressor.probeVideo(
+        _at(result, destination),
+      );
+      // The fixture's tracks share an alternate group, so they are alternatives
+      // a player picks from: Apple keeps one, as does Windows, which keeps the
+      // first track only.
+      expect(probe!.audioTrackCount, _isApple || _isWindows ? 1 : 2);
+    });
+
+    testWidgets('drops an audio track it cannot keep, not the file', (_) async {
+      final destination = _out('mixed-audio.mp4');
+      final result =
+          await NativeMediaCompressor.compressVideo(
+            source: await _fixture('mixed_audio_tracks.mp4'),
+            destination: destination,
+            options: const VideoOptions(maxShortSide: 240),
+          ).result;
+
+      expect(result.status, CompressionStatus.compressed, reason: '$result');
+      final probe = await NativeMediaCompressor.probeVideo(
+        _at(result, destination),
+      );
+      expect(probe!.audioTrackCount, greaterThanOrEqualTo(1));
+      expect(probe.audioCodec, 'audio/mp4a-latm');
+    });
+
+    testWidgets('probe reports the source size', (_) async {
+      final source = await _fixture('h264_aac_1080p.mp4');
+      final video = await NativeMediaCompressor.probeVideo(source);
+      final image = await NativeMediaCompressor.probeImage(
+        await _fixture('photo_exif_rotated.jpg'),
+      );
+
+      expect(video!.sizeBytes, await files.sizeOf(source));
+      expect(image!.sizeBytes, greaterThan(0));
     });
 
     testWidgets('re-encodes audio it cannot copy to AAC', (_) async {
@@ -1414,6 +1443,17 @@ void main() {
       expect(image.status, CompressionStatus.compressed, reason: '$image');
       expect((image.width, image.height), (600, 800));
       expect(video.status, CompressionStatus.compressed, reason: '$video');
+      final kept =
+          await NativeMediaCompressor.compressVideo(
+            source: clip,
+            destination: _out('content-savings.mp4'),
+            options: const VideoOptions(
+              maxShortSide: 240,
+              minSavingsPercent: 99,
+            ),
+          ).result;
+      // The probe tells the size of a content:// source, so the rule applies.
+      expect(kept.status, CompressionStatus.skipped, reason: '$kept');
     });
   });
 }

@@ -166,9 +166,11 @@ void HandleProbeImage(const gchar* source,
   RunInBackground([path = std::string(source), response] {
     const std::optional<nmc::ImageInfo> info = nmc::ProbeImageFile(path);
     PostToMain([response, info] {
+      int64_t size_bytes = info ? info->size_bytes.value_or(0) : 0;
       g_autoptr(NmcImageProbe) probe =
           info ? nmc_image_probe_new(info->width, info->height, info->frame_count,
-                                     info->mime_type.c_str())
+                                     info->mime_type.c_str(),
+                                     info->size_bytes ? &size_bytes : nullptr)
                : nullptr;
       nmc_media_compressor_host_api_respond_probe_image(response.get(), probe);
     });
@@ -185,11 +187,14 @@ void HandleProbeVideo(const gchar* source,
       if (info) {
         int64_t bitrate = info->bitrate.value_or(0);
         double frame_rate = info->frame_rate.value_or(0);
+        int64_t audio_track_count = info->audio_track_count;
+        int64_t size_bytes = info->size_bytes.value_or(0);
         probe = nmc_video_probe_new(info->width, info->height, info->rotation_degrees,
                                     info->duration_ms, info->bitrate ? &bitrate : nullptr,
                                     info->video_codec.c_str(), info->is_hdr, info->has_audio,
                                     info->has_audio ? info->audio_codec.c_str() : nullptr,
-                                    info->frame_rate ? &frame_rate : nullptr);
+                                    info->frame_rate ? &frame_rate : nullptr, &audio_track_count,
+                                    info->size_bytes ? &size_bytes : nullptr);
       }
       nmc_media_compressor_host_api_respond_probe_video(response.get(), probe);
     });

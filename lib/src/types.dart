@@ -453,6 +453,7 @@ final class ImageMetadata {
     required this.height,
     required this.frameCount,
     this.mimeType,
+    this.sizeBytes,
   });
 
   /// Width in pixels after EXIF orientation is applied.
@@ -466,6 +467,9 @@ final class ImageMetadata {
 
   /// MIME type the platform detected, such as `image/heic`.
   final String? mimeType;
+
+  /// Size of the source in bytes, when the platform can tell.
+  final int? sizeBytes;
 
   /// Whether the image has more than one frame.
   bool get isAnimated => frameCount > 1;
@@ -485,6 +489,8 @@ final class VideoMetadata {
     this.videoCodec,
     this.audioCodec,
     this.frameRate,
+    this.audioTrackCount,
+    this.sizeBytes,
   });
 
   /// Width in pixels as displayed, after rotation.
@@ -518,6 +524,14 @@ final class VideoMetadata {
 
   /// Average frames per second, when the container reports it.
   final double? frameRate;
+
+  /// Number of audio tracks, when the platform can tell.
+  final int? audioTrackCount;
+
+  /// Size of the source in bytes, when the platform can tell. Lets
+  /// `minSavingsPercent` work for sources that are not plain files, such as
+  /// Android `content://` URIs.
+  final int? sizeBytes;
 }
 
 /// A running video compression.

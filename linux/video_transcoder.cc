@@ -165,7 +165,11 @@ struct Discovery {
   std::string error;
   VideoInfo info;
   GstVideoOrientationMethod orientation = GST_VIDEO_ORIENTATION_IDENTITY;
-  std::vector<std::string> audio_codecs;
+  struct AudioTrack {
+    std::string codec;
+    bool has_decoder = false;
+  };
+  std::vector<AudioTrack> audio_tracks;
   // Owned; parsed caps of the video stream, for finding a decoder.
   GstCaps* video_caps = nullptr;
 };
@@ -221,6 +225,17 @@ std::string CapsName(const GstApi* g, const GstCaps* caps, int* mpeg_version = n
     g->gst_structure_get_int(structure, "mpegversion", mpeg_version);
   }
   return g->gst_structure_get_name(structure);
+}
+
+bool HasDecoder(const GstApi* g, const GstCaps* caps, GstElementFactoryListType media) {
+  if (caps == nullptr) return false;
+  GList* decoders = g->gst_element_factory_list_get_elements(
+      GST_ELEMENT_FACTORY_TYPE_DECODER | media, GST_RANK_MARGINAL);
+  GList* usable = g->gst_element_factory_list_filter(decoders, caps, GST_PAD_SINK, FALSE);
+  const bool found = usable != nullptr;
+  g->gst_plugin_feature_list_free(usable);
+  g->gst_plugin_feature_list_free(decoders);
+  return found;
 }
 
 Discovery Discover(const GstApi* g, const std::string& path) {
@@ -296,15 +311,18 @@ Discovery Discover(const GstApi* g, const std::string& path) {
     GstCaps* caps = g->gst_discoverer_stream_info_get_caps(static_cast<GstDiscovererStreamInfo*>(item->data));
     int mpeg_version = 0;
     const std::string name = CapsName(g, caps, &mpeg_version);
+    const bool has_decoder = HasDecoder(g, caps, GST_ELEMENT_FACTORY_TYPE_MEDIA_AUDIO);
     g->Unref(caps);
-    discovery.audio_codecs.push_back(NormalizeAudioCodec(name, mpeg_version));
+    discovery.audio_tracks.push_back({NormalizeAudioCodec(name, mpeg_version), has_decoder});
   }
   g->gst_discoverer_stream_info_list_free(audios);
   g_object_unref(info);
 
-  discovery.info.has_audio = !discovery.audio_codecs.empty();
-  if (discovery.info.has_audio) discovery.info.audio_codec = discovery.audio_codecs.front();
+  discovery.info.audio_track_count = static_cast<int64_t>(discovery.audio_tracks.size());
+  discovery.info.has_audio = !discovery.audio_tracks.empty();
+  if (discovery.info.has_audio) discovery.info.audio_codec = discovery.audio_tracks.front().codec;
   const int64_t size = FileSize(path);
+  if (size >= 0) discovery.info.size_bytes = size;
   if (size > 0 && discovery.info.duration_ms > 0) {
     discovery.info.bitrate = size * 8 * 1000 / discovery.info.duration_ms;
   }
@@ -317,17 +335,6 @@ struct DiscoveryHolder {
   Discovery discovery;
   ~DiscoveryHolder() { g->Unref(discovery.video_caps); }
 };
-
-bool HasDecoder(const GstApi* g, const GstCaps* caps) {
-  if (caps == nullptr) return false;
-  GList* decoders = g->gst_element_factory_list_get_elements(
-      GST_ELEMENT_FACTORY_TYPE_DECODER | GST_ELEMENT_FACTORY_TYPE_MEDIA_VIDEO, GST_RANK_MARGINAL);
-  GList* usable = g->gst_element_factory_list_filter(decoders, caps, GST_PAD_SINK, FALSE);
-  const bool found = usable != nullptr;
-  g->gst_plugin_feature_list_free(usable);
-  g->gst_plugin_feature_list_free(decoders);
-  return found;
-}
 
 bool HasProperty(GstElement* element, const char* name) {
   return g_object_class_find_property(G_OBJECT_GET_CLASS(element), name) != nullptr;
@@ -354,9 +361,13 @@ void ConfigureEncoder(const GstApi* g, GstElement* encoder, const std::string& f
   }
 }
 
-std::string PadCaps(const GstApi* g, GstPad* pad, int* mpeg_version = nullptr) {
+GstCaps* PadCurrentCaps(const GstApi* g, GstPad* pad) {
   GstCaps* caps = g->gst_pad_get_current_caps(pad);
-  if (caps == nullptr) caps = g->gst_pad_query_caps(pad, nullptr);
+  return caps != nullptr ? caps : g->gst_pad_query_caps(pad, nullptr);
+}
+
+std::string PadCaps(const GstApi* g, GstPad* pad, int* mpeg_version = nullptr) {
+  GstCaps* caps = PadCurrentCaps(g, pad);
   std::string name = CapsName(g, caps, mpeg_version);
   g->Unref(caps);
   return name;
@@ -604,16 +615,23 @@ void AddTrimPoint(Graph* graph, GstElement* element) {
 }
 
 void LinkParsedPad(Graph* graph, GstPad* pad) {
+  const GstApi* g = graph->g;
+  GstCaps* caps = PadCurrentCaps(g, pad);
   int mpeg_version = 0;
-  const std::string media = PadCaps(graph->g, pad, &mpeg_version);
+  const std::string media = CapsName(g, caps, &mpeg_version);
+  const bool audio = g_str_has_prefix(media.c_str(), "audio/");
+  const bool aac = audio && NormalizeAudioCodec(media, mpeg_version) == kAacMime;
+  // A track without a decoder got no branch and must not take the branch of
+  // a decodable track whose pad comes later.
+  const bool keepable = aac || (audio && HasDecoder(g, caps, GST_ELEMENT_FACTORY_TYPE_MEDIA_AUDIO));
+  g->Unref(caps);
   std::lock_guard<std::mutex> lock(graph->mutex);
   BlockForTrimSeek(graph, pad);
   GstElement* target = nullptr;
   if (g_str_has_prefix(media.c_str(), "video/") && !graph->video_linked) {
     graph->video_linked = true;
     target = graph->video_queue;
-  } else if (g_str_has_prefix(media.c_str(), "audio/")) {
-    const bool aac = NormalizeAudioCodec(media, mpeg_version) == kAacMime;
+  } else if (keepable) {
     for (auto& branch : graph->audio) {
       if (branch->used || branch->copy != aac) continue;
       branch->used = true;
@@ -901,10 +919,16 @@ Outcome Run(const GstApi* g, const VideoJob& job, const Discovery& discovery,
   if (graph.trimming) AddTrimPoint(&graph, graph.video_rate);
 
   if (job.include_audio) {
-    for (const std::string& codec : discovery.audio_codecs) {
+    for (const Discovery::AudioTrack& track : discovery.audio_tracks) {
+      const bool copy = track.codec == kAacMime;
+      // A track that cannot be decoded or re-encoded is dropped here, before
+      // it could stop the running pipeline with a missing-plugin error.
+      if (!copy && !track.has_decoder) continue;
+      GstElement* encoder = copy ? nullptr : AddAacEncoder(&graph, job.audio_bitrate);
+      if (!copy && encoder == nullptr) continue;
       auto branch = std::make_unique<Graph::AudioBranch>();
       branch->graph = &graph;
-      branch->copy = codec == kAacMime;
+      branch->copy = copy;
       branch->queue = graph.Add("queue");
       GstElement* aac_parser = graph.Add("aacparse");
       GstElement* audio_decoder = branch->copy ? nullptr : graph.Add("decodebin");
@@ -919,8 +943,6 @@ Outcome Run(const GstApi* g, const VideoJob& job, const Discovery& discovery,
       if (branch->copy) {
         audio_linked = g->gst_element_link(branch->queue, aac_parser);
       } else {
-        GstElement* encoder = AddAacEncoder(&graph, job.audio_bitrate);
-        if (encoder == nullptr) return Unsupported("No AAC encoder in GStreamer for " + codec);
         audio_linked = g->gst_element_link(branch->queue, audio_decoder) &&
                        g->gst_element_link(branch->raw_head, resample) &&
                        g->gst_element_link(resample, encoder) &&
@@ -935,6 +957,14 @@ Outcome Run(const GstApi* g, const VideoJob& job, const Discovery& discovery,
       // range that the first kept samples depend on.
       if (graph.trimming) AddTrimPoint(&graph, branch->copy ? branch->queue : branch->raw_head);
       graph.audio.push_back(std::move(branch));
+    }
+    if (!discovery.audio_tracks.empty() && graph.audio.empty()) {
+      std::string codecs;
+      for (const Discovery::AudioTrack& track : discovery.audio_tracks) {
+        if (!codecs.empty()) codecs += ", ";
+        codecs += track.codec;
+      }
+      return Unsupported("No GStreamer decoder or AAC encoder for the audio: " + codecs);
     }
   }
 
@@ -1005,7 +1035,7 @@ Outcome Transcode(const GstApi* g, const VideoJob& job, const std::atomic<bool>&
   const std::optional<KeptRange> range =
       ResolveKeptRange(job.start_ms, job.end_ms, discovery.info.duration_ms);
   if (!range) return Unsupported("The trim range keeps nothing of the video");
-  if (!HasDecoder(g, discovery.video_caps)) {
+  if (!HasDecoder(g, discovery.video_caps, GST_ELEMENT_FACTORY_TYPE_MEDIA_VIDEO)) {
     return Unsupported("No GStreamer decoder for " + discovery.info.video_codec);
   }
   if (cancelled) return Cancelled();
@@ -1229,7 +1259,7 @@ Outcome Thumbnail(const GstApi* g, const ThumbnailJob& job, const std::string& o
   const Discovery& discovery = holder.discovery;
   if (discovery.result == Discovery::Result::kUnreadable) return Failed(discovery.error);
   if (discovery.result == Discovery::Result::kNoVideo) return Unsupported("No video track");
-  if (!HasDecoder(g, discovery.video_caps)) {
+  if (!HasDecoder(g, discovery.video_caps, GST_ELEMENT_FACTORY_TYPE_MEDIA_VIDEO)) {
     return Unsupported("No GStreamer decoder for " + discovery.info.video_codec);
   }
   return ExtractFrame(g, job, discovery, output);

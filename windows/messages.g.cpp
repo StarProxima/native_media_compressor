@@ -1085,11 +1085,13 @@ ImageProbe::ImageProbe(
   int64_t width,
   int64_t height,
   int64_t frame_count,
-  const std::string* mime_type)
+  const std::string* mime_type,
+  const int64_t* size_bytes)
  : width_(width),
     height_(height),
     frame_count_(frame_count),
-    mime_type_(mime_type ? std::optional<std::string>(*mime_type) : std::nullopt) {}
+    mime_type_(mime_type ? std::optional<std::string>(*mime_type) : std::nullopt),
+    size_bytes_(size_bytes ? std::optional<int64_t>(*size_bytes) : std::nullopt) {}
 
 int64_t ImageProbe::width() const {
   return width_;
@@ -1131,13 +1133,27 @@ void ImageProbe::set_mime_type(std::string_view value_arg) {
 }
 
 
+const int64_t* ImageProbe::size_bytes() const {
+  return size_bytes_ ? &(*size_bytes_) : nullptr;
+}
+
+void ImageProbe::set_size_bytes(const int64_t* value_arg) {
+  size_bytes_ = value_arg ? std::optional<int64_t>(*value_arg) : std::nullopt;
+}
+
+void ImageProbe::set_size_bytes(int64_t value_arg) {
+  size_bytes_ = value_arg;
+}
+
+
 EncodableList ImageProbe::ToEncodableList() const {
   EncodableList list;
-  list.reserve(4);
+  list.reserve(5);
   list.push_back(EncodableValue(width_));
   list.push_back(EncodableValue(height_));
   list.push_back(EncodableValue(frame_count_));
   list.push_back(mime_type_ ? EncodableValue(*mime_type_) : EncodableValue());
+  list.push_back(size_bytes_ ? EncodableValue(*size_bytes_) : EncodableValue());
   return list;
 }
 
@@ -1150,11 +1166,15 @@ ImageProbe ImageProbe::FromEncodableList(const EncodableList& list) {
   if (!encodable_mime_type.IsNull()) {
     decoded.set_mime_type(std::get<std::string>(encodable_mime_type));
   }
+  auto& encodable_size_bytes = list[4];
+  if (!encodable_size_bytes.IsNull()) {
+    decoded.set_size_bytes(std::get<int64_t>(encodable_size_bytes));
+  }
   return decoded;
 }
 
 bool ImageProbe::operator==(const ImageProbe& other) const {
-  return PigeonInternalDeepEquals(width_, other.width_) && PigeonInternalDeepEquals(height_, other.height_) && PigeonInternalDeepEquals(frame_count_, other.frame_count_) && PigeonInternalDeepEquals(mime_type_, other.mime_type_);
+  return PigeonInternalDeepEquals(width_, other.width_) && PigeonInternalDeepEquals(height_, other.height_) && PigeonInternalDeepEquals(frame_count_, other.frame_count_) && PigeonInternalDeepEquals(mime_type_, other.mime_type_) && PigeonInternalDeepEquals(size_bytes_, other.size_bytes_);
 }
 
 bool ImageProbe::operator!=(const ImageProbe& other) const {
@@ -1167,6 +1187,7 @@ size_t ImageProbe::Hash() const {
   result = result * 31 + PigeonInternalDeepHash(height_);
   result = result * 31 + PigeonInternalDeepHash(frame_count_);
   result = result * 31 + PigeonInternalDeepHash(mime_type_);
+  result = result * 31 + PigeonInternalDeepHash(size_bytes_);
   return result;
 }
 
@@ -1200,7 +1221,9 @@ VideoProbe::VideoProbe(
   bool is_hdr,
   bool has_audio,
   const std::string* audio_codec,
-  const double* frame_rate)
+  const double* frame_rate,
+  const int64_t* audio_track_count,
+  const int64_t* size_bytes)
  : width_(width),
     height_(height),
     rotation_degrees_(rotation_degrees),
@@ -1210,7 +1233,9 @@ VideoProbe::VideoProbe(
     is_hdr_(is_hdr),
     has_audio_(has_audio),
     audio_codec_(audio_codec ? std::optional<std::string>(*audio_codec) : std::nullopt),
-    frame_rate_(frame_rate ? std::optional<double>(*frame_rate) : std::nullopt) {}
+    frame_rate_(frame_rate ? std::optional<double>(*frame_rate) : std::nullopt),
+    audio_track_count_(audio_track_count ? std::optional<int64_t>(*audio_track_count) : std::nullopt),
+    size_bytes_(size_bytes ? std::optional<int64_t>(*size_bytes) : std::nullopt) {}
 
 int64_t VideoProbe::width() const {
   return width_;
@@ -1318,9 +1343,35 @@ void VideoProbe::set_frame_rate(double value_arg) {
 }
 
 
+const int64_t* VideoProbe::audio_track_count() const {
+  return audio_track_count_ ? &(*audio_track_count_) : nullptr;
+}
+
+void VideoProbe::set_audio_track_count(const int64_t* value_arg) {
+  audio_track_count_ = value_arg ? std::optional<int64_t>(*value_arg) : std::nullopt;
+}
+
+void VideoProbe::set_audio_track_count(int64_t value_arg) {
+  audio_track_count_ = value_arg;
+}
+
+
+const int64_t* VideoProbe::size_bytes() const {
+  return size_bytes_ ? &(*size_bytes_) : nullptr;
+}
+
+void VideoProbe::set_size_bytes(const int64_t* value_arg) {
+  size_bytes_ = value_arg ? std::optional<int64_t>(*value_arg) : std::nullopt;
+}
+
+void VideoProbe::set_size_bytes(int64_t value_arg) {
+  size_bytes_ = value_arg;
+}
+
+
 EncodableList VideoProbe::ToEncodableList() const {
   EncodableList list;
-  list.reserve(10);
+  list.reserve(12);
   list.push_back(EncodableValue(width_));
   list.push_back(EncodableValue(height_));
   list.push_back(EncodableValue(rotation_degrees_));
@@ -1331,6 +1382,8 @@ EncodableList VideoProbe::ToEncodableList() const {
   list.push_back(EncodableValue(has_audio_));
   list.push_back(audio_codec_ ? EncodableValue(*audio_codec_) : EncodableValue());
   list.push_back(frame_rate_ ? EncodableValue(*frame_rate_) : EncodableValue());
+  list.push_back(audio_track_count_ ? EncodableValue(*audio_track_count_) : EncodableValue());
+  list.push_back(size_bytes_ ? EncodableValue(*size_bytes_) : EncodableValue());
   return list;
 }
 
@@ -1358,11 +1411,19 @@ VideoProbe VideoProbe::FromEncodableList(const EncodableList& list) {
   if (!encodable_frame_rate.IsNull()) {
     decoded.set_frame_rate(std::get<double>(encodable_frame_rate));
   }
+  auto& encodable_audio_track_count = list[10];
+  if (!encodable_audio_track_count.IsNull()) {
+    decoded.set_audio_track_count(std::get<int64_t>(encodable_audio_track_count));
+  }
+  auto& encodable_size_bytes = list[11];
+  if (!encodable_size_bytes.IsNull()) {
+    decoded.set_size_bytes(std::get<int64_t>(encodable_size_bytes));
+  }
   return decoded;
 }
 
 bool VideoProbe::operator==(const VideoProbe& other) const {
-  return PigeonInternalDeepEquals(width_, other.width_) && PigeonInternalDeepEquals(height_, other.height_) && PigeonInternalDeepEquals(rotation_degrees_, other.rotation_degrees_) && PigeonInternalDeepEquals(duration_ms_, other.duration_ms_) && PigeonInternalDeepEquals(bitrate_, other.bitrate_) && PigeonInternalDeepEquals(video_codec_, other.video_codec_) && PigeonInternalDeepEquals(is_hdr_, other.is_hdr_) && PigeonInternalDeepEquals(has_audio_, other.has_audio_) && PigeonInternalDeepEquals(audio_codec_, other.audio_codec_) && PigeonInternalDeepEquals(frame_rate_, other.frame_rate_);
+  return PigeonInternalDeepEquals(width_, other.width_) && PigeonInternalDeepEquals(height_, other.height_) && PigeonInternalDeepEquals(rotation_degrees_, other.rotation_degrees_) && PigeonInternalDeepEquals(duration_ms_, other.duration_ms_) && PigeonInternalDeepEquals(bitrate_, other.bitrate_) && PigeonInternalDeepEquals(video_codec_, other.video_codec_) && PigeonInternalDeepEquals(is_hdr_, other.is_hdr_) && PigeonInternalDeepEquals(has_audio_, other.has_audio_) && PigeonInternalDeepEquals(audio_codec_, other.audio_codec_) && PigeonInternalDeepEquals(frame_rate_, other.frame_rate_) && PigeonInternalDeepEquals(audio_track_count_, other.audio_track_count_) && PigeonInternalDeepEquals(size_bytes_, other.size_bytes_);
 }
 
 bool VideoProbe::operator!=(const VideoProbe& other) const {
@@ -1381,6 +1442,8 @@ size_t VideoProbe::Hash() const {
   result = result * 31 + PigeonInternalDeepHash(has_audio_);
   result = result * 31 + PigeonInternalDeepHash(audio_codec_);
   result = result * 31 + PigeonInternalDeepHash(frame_rate_);
+  result = result * 31 + PigeonInternalDeepHash(audio_track_count_);
+  result = result * 31 + PigeonInternalDeepHash(size_bytes_);
   return result;
 }
 

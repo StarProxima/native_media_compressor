@@ -535,11 +535,9 @@ Outcome Run(const VideoJob& job, const std::wstring& output,
 
   NMC_RETURN_IF_FAILED(reader->SetStreamSelection(kAllStreams, FALSE), "Selecting streams");
   NMC_RETURN_IF_FAILED(reader->SetStreamSelection(kVideoStream, TRUE), "Selecting the video");
-  const int audio_streams = job.include_audio ? CountAudioStreams(reader.Get()) : 0;
-  if (audio_streams > 1) {
-    return Outcome::Of(Status::kUnsupported, "Several audio tracks cannot be kept");
-  }
-  const bool has_audio = audio_streams == 1;
+  // Of several audio tracks only the first is kept: kAudioStream reads that
+  // one, and the others stay deselected.
+  const bool has_audio = job.include_audio && CountAudioStreams(reader.Get()) > 0;
   ComPtr<IMFMediaType> decoded_audio;
   if (has_audio) {
     NMC_RETURN_IF_FAILED(reader->SetStreamSelection(kAudioStream, TRUE), "Selecting the audio");
@@ -1150,6 +1148,7 @@ std::optional<VideoInfo> ProbeVideoFile(const std::wstring& source) {
   if (SUCCEEDED(video->GetGUID(MF_MT_SUBTYPE, &video_subtype))) {
     info.video_codec = VideoCodecName(video_subtype);
   }
+  info.audio_track_count = CountAudioStreams(reader.Get());
   ComPtr<IMFMediaType> audio;
   if (SUCCEEDED(reader->GetNativeMediaType(kAudioStream, 0, &audio))) {
     info.has_audio = true;
@@ -1166,6 +1165,7 @@ std::optional<VideoInfo> ProbeVideoFile(const std::wstring& source) {
     info.frame_rate = static_cast<double>(rate_numerator) / rate_denominator;
   }
   const int64_t size = FileSize(source);
+  if (size >= 0) info.size_bytes = size;
   if (size > 0 && info.duration_ms > 0) info.bitrate = size * 8 * 1000 / info.duration_ms;
   return info;
 }

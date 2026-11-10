@@ -72,7 +72,7 @@ final class VideoTranscoder {
         startMs: request.startMs, endMs: request.endMs, duration: media.duration)
     else { return .status(.unsupported, "the trim range keeps nothing") }
     let audioPlan = request.includeAudio ? media.audioPlan : AudioPlan()
-    if audioPlan.hasUnreadable {
+    if audioPlan.hasUnreadable, audioPlan.sources.isEmpty {
       let codec = audioPlan.unreadableCodec ?? "of unknown format"
       return .status(.unsupported, "audio \(codec) cannot be decoded")
     }
@@ -120,8 +120,11 @@ final class VideoTranscoder {
     writer.add(videoInput)
 
     // Screen recordings with a microphone keep system sound and voice in
-    // separate tracks that play together, so every played group is kept.
+    // separate tracks that play together, so every played group is kept. A
+    // track this system cannot decode or re-encode is left out while another
+    // one keeps the sound.
     var audioPumps: [TrackPump] = []
+    var droppedAudio: String?
     for source in audioPlan.sources {
       let output: AVAssetReaderTrackOutput
       let input: AVAssetWriterInput
@@ -130,11 +133,17 @@ final class VideoTranscoder {
         output = AVAssetReaderTrackOutput(track: track.track, outputSettings: nil)
         input = AVAssetWriterInput(
           mediaType: .audio, outputSettings: nil, sourceFormatHint: track.format)
-        guard reader.canAdd(output) else { return .status(.unsupported, "cannot copy audio track") }
+        guard reader.canAdd(output) else {
+          droppedAudio = "cannot copy audio track"
+          continue
+        }
         reader.add(output)
       case .encode(let track):
         guard let pair = Self.encoder(for: track, reader: reader, writer: writer, request: request)
-        else { return .status(.unsupported, "cannot re-encode audio \(track.codec ?? "")") }
+        else {
+          droppedAudio = "cannot re-encode audio \(track.codec ?? "")"
+          continue
+        }
         (output, input) = pair
       case .encodeHidden(let track):
         let file = FileManager.default.temporaryDirectory
@@ -143,13 +152,19 @@ final class VideoTranscoder {
         let hidden = AVURLAsset(url: file)
         guard ContainerAudio.copySamples(ofTrack: track.id, from: asset.url, to: file),
           let decoded = try? await MediaAsset.load(hidden).audio.first
-        else { return .status(.unsupported, "cannot decode audio \(track.codec ?? "")") }
+        else {
+          droppedAudio = "cannot decode audio \(track.codec ?? "")"
+          continue
+        }
         let hiddenReader = try AVAssetReader(asset: hidden)
         if isTrimmed { hiddenReader.timeRange = range }
         guard
           let pair = Self.encoder(
             for: decoded, reader: hiddenReader, writer: writer, request: request)
-        else { return .status(.unsupported, "cannot re-encode audio \(track.codec ?? "")") }
+        else {
+          droppedAudio = "cannot re-encode audio \(track.codec ?? "")"
+          continue
+        }
         readers.append(hiddenReader)
         (output, input) = pair
       }
@@ -158,6 +173,7 @@ final class VideoTranscoder {
       writer.add(input)
       audioPumps.append(TrackPump(output: output, input: input))
     }
+    if audioPumps.isEmpty, let droppedAudio { return .status(.unsupported, droppedAudio) }
 
     guard readers.allSatisfy({ $0.startReading() }), writer.startWriting() else {
       let error = readers.lazy.compactMap(\.error).first ?? writer.error

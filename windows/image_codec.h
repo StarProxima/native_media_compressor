@@ -32,6 +32,7 @@ struct ImageInfo {
   int64_t height = 0;
   int64_t frame_count = 1;
   std::optional<std::string> mime_type;
+  std::optional<int64_t> size_bytes;
 };
 
 // Decodes the first frame with WIC, applies EXIF orientation, scales down and

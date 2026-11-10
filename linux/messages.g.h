@@ -667,12 +667,13 @@ G_DECLARE_FINAL_TYPE(NmcImageProbe, nmc_image_probe, NMC, IMAGE_PROBE, GObject)
  * height: field in this object.
  * frame_count: field in this object.
  * mime_type: field in this object.
+ * size_bytes: field in this object.
  *
  * Creates a new #ImageProbe object.
  *
  * Returns: a new #NmcImageProbe
  */
-NmcImageProbe* nmc_image_probe_new(int64_t width, int64_t height, int64_t frame_count, const gchar* mime_type);
+NmcImageProbe* nmc_image_probe_new(int64_t width, int64_t height, int64_t frame_count, const gchar* mime_type, int64_t* size_bytes);
 
 /**
  * nmc_image_probe_get_width
@@ -715,6 +716,16 @@ int64_t nmc_image_probe_get_frame_count(NmcImageProbe* object);
 const gchar* nmc_image_probe_get_mime_type(NmcImageProbe* object);
 
 /**
+ * nmc_image_probe_get_size_bytes
+ * @object: a #NmcImageProbe.
+ *
+ * Size of the source in bytes, when the platform can tell.
+ *
+ * Returns: the field value.
+ */
+int64_t* nmc_image_probe_get_size_bytes(NmcImageProbe* object);
+
+/**
  * nmc_image_probe_equals:
  * @a: a #NmcImageProbe.
  * @b: another #NmcImageProbe.
@@ -754,12 +765,14 @@ G_DECLARE_FINAL_TYPE(NmcVideoProbe, nmc_video_probe, NMC, VIDEO_PROBE, GObject)
  * has_audio: field in this object.
  * audio_codec: field in this object.
  * frame_rate: field in this object.
+ * audio_track_count: field in this object.
+ * size_bytes: field in this object.
  *
  * Creates a new #VideoProbe object.
  *
  * Returns: a new #NmcVideoProbe
  */
-NmcVideoProbe* nmc_video_probe_new(int64_t width, int64_t height, int64_t rotation_degrees, int64_t duration_ms, int64_t* bitrate, const gchar* video_codec, gboolean is_hdr, gboolean has_audio, const gchar* audio_codec, double* frame_rate);
+NmcVideoProbe* nmc_video_probe_new(int64_t width, int64_t height, int64_t rotation_degrees, int64_t duration_ms, int64_t* bitrate, const gchar* video_codec, gboolean is_hdr, gboolean has_audio, const gchar* audio_codec, double* frame_rate, int64_t* audio_track_count, int64_t* size_bytes);
 
 /**
  * nmc_video_probe_get_width
@@ -861,6 +874,26 @@ const gchar* nmc_video_probe_get_audio_codec(NmcVideoProbe* object);
  * Returns: the field value.
  */
 double* nmc_video_probe_get_frame_rate(NmcVideoProbe* object);
+
+/**
+ * nmc_video_probe_get_audio_track_count
+ * @object: a #NmcVideoProbe.
+ *
+ * Number of audio tracks the container has.
+ *
+ * Returns: the field value.
+ */
+int64_t* nmc_video_probe_get_audio_track_count(NmcVideoProbe* object);
+
+/**
+ * nmc_video_probe_get_size_bytes
+ * @object: a #NmcVideoProbe.
+ *
+ * Size of the source in bytes, when the platform can tell.
+ *
+ * Returns: the field value.
+ */
+int64_t* nmc_video_probe_get_size_bytes(NmcVideoProbe* object);
 
 /**
  * nmc_video_probe_equals:

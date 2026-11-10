@@ -17,10 +17,12 @@ enum Scaling {
 }
 
 extension URL {
-  var fileSize: Int64 {
+  var knownFileSize: Int64? {
     let attributes = try? FileManager.default.attributesOfItem(atPath: path)
-    return (attributes?[.size] as? NSNumber)?.int64Value ?? 0
+    return (attributes?[.size] as? NSNumber)?.int64Value
   }
+
+  var fileSize: Int64 { knownFileSize ?? 0 }
 }
 
 /// A temporary file next to the destination that replaces it only on

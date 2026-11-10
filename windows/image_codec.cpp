@@ -641,6 +641,7 @@ std::optional<ImageInfo> ProbeImageFile(const std::wstring& source) {
   info.height = swaps_sides ? image.width : image.height;
   info.frame_count = image.frame_count;
   info.mime_type = image.mime_type;
+  if (const int64_t size = FileSize(source); size >= 0) info.size_bytes = size;
   return info;
 }
 

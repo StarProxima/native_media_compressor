@@ -539,6 +539,8 @@ struct ImageProbe: Hashable {
   var height: Int64
   var frameCount: Int64
   var mimeType: String? = nil
+  /// Size of the source in bytes, when the platform can tell.
+  var sizeBytes: Int64? = nil
 
 
   // swift-format-ignore: AlwaysUseLowerCamelCase
@@ -547,12 +549,14 @@ struct ImageProbe: Hashable {
     let height = pigeonVar_list[1] as! Int64
     let frameCount = pigeonVar_list[2] as! Int64
     let mimeType: String? = nilOrValue(pigeonVar_list[3])
+    let sizeBytes: Int64? = nilOrValue(pigeonVar_list[4])
 
     return ImageProbe(
       width: width,
       height: height,
       frameCount: frameCount,
-      mimeType: mimeType
+      mimeType: mimeType,
+      sizeBytes: sizeBytes
     )
   }
   func toList() -> [Any?] {
@@ -561,13 +565,14 @@ struct ImageProbe: Hashable {
       height,
       frameCount,
       mimeType,
+      sizeBytes,
     ]
   }
   static func == (lhs: ImageProbe, rhs: ImageProbe) -> Bool {
     if Swift.type(of: lhs) != Swift.type(of: rhs) {
       return false
     }
-    return deepEqualsMessages(lhs.width, rhs.width) && deepEqualsMessages(lhs.height, rhs.height) && deepEqualsMessages(lhs.frameCount, rhs.frameCount) && deepEqualsMessages(lhs.mimeType, rhs.mimeType)
+    return deepEqualsMessages(lhs.width, rhs.width) && deepEqualsMessages(lhs.height, rhs.height) && deepEqualsMessages(lhs.frameCount, rhs.frameCount) && deepEqualsMessages(lhs.mimeType, rhs.mimeType) && deepEqualsMessages(lhs.sizeBytes, rhs.sizeBytes)
   }
 
   func hash(into hasher: inout Hasher) {
@@ -576,6 +581,7 @@ struct ImageProbe: Hashable {
     deepHashMessages(value: height, hasher: &hasher)
     deepHashMessages(value: frameCount, hasher: &hasher)
     deepHashMessages(value: mimeType, hasher: &hasher)
+    deepHashMessages(value: sizeBytes, hasher: &hasher)
   }
 }
 
@@ -593,6 +599,10 @@ struct VideoProbe: Hashable {
   /// Average frames per second of the video track, when the container
   /// reports it.
   var frameRate: Double? = nil
+  /// Number of audio tracks the container has.
+  var audioTrackCount: Int64? = nil
+  /// Size of the source in bytes, when the platform can tell.
+  var sizeBytes: Int64? = nil
 
 
   // swift-format-ignore: AlwaysUseLowerCamelCase
@@ -607,6 +617,8 @@ struct VideoProbe: Hashable {
     let hasAudio = pigeonVar_list[7] as! Bool
     let audioCodec: String? = nilOrValue(pigeonVar_list[8])
     let frameRate: Double? = nilOrValue(pigeonVar_list[9])
+    let audioTrackCount: Int64? = nilOrValue(pigeonVar_list[10])
+    let sizeBytes: Int64? = nilOrValue(pigeonVar_list[11])
 
     return VideoProbe(
       width: width,
@@ -618,7 +630,9 @@ struct VideoProbe: Hashable {
       isHdr: isHdr,
       hasAudio: hasAudio,
       audioCodec: audioCodec,
-      frameRate: frameRate
+      frameRate: frameRate,
+      audioTrackCount: audioTrackCount,
+      sizeBytes: sizeBytes
     )
   }
   func toList() -> [Any?] {
@@ -633,13 +647,15 @@ struct VideoProbe: Hashable {
       hasAudio,
       audioCodec,
       frameRate,
+      audioTrackCount,
+      sizeBytes,
     ]
   }
   static func == (lhs: VideoProbe, rhs: VideoProbe) -> Bool {
     if Swift.type(of: lhs) != Swift.type(of: rhs) {
       return false
     }
-    return deepEqualsMessages(lhs.width, rhs.width) && deepEqualsMessages(lhs.height, rhs.height) && deepEqualsMessages(lhs.rotationDegrees, rhs.rotationDegrees) && deepEqualsMessages(lhs.durationMs, rhs.durationMs) && deepEqualsMessages(lhs.bitrate, rhs.bitrate) && deepEqualsMessages(lhs.videoCodec, rhs.videoCodec) && deepEqualsMessages(lhs.isHdr, rhs.isHdr) && deepEqualsMessages(lhs.hasAudio, rhs.hasAudio) && deepEqualsMessages(lhs.audioCodec, rhs.audioCodec) && deepEqualsMessages(lhs.frameRate, rhs.frameRate)
+    return deepEqualsMessages(lhs.width, rhs.width) && deepEqualsMessages(lhs.height, rhs.height) && deepEqualsMessages(lhs.rotationDegrees, rhs.rotationDegrees) && deepEqualsMessages(lhs.durationMs, rhs.durationMs) && deepEqualsMessages(lhs.bitrate, rhs.bitrate) && deepEqualsMessages(lhs.videoCodec, rhs.videoCodec) && deepEqualsMessages(lhs.isHdr, rhs.isHdr) && deepEqualsMessages(lhs.hasAudio, rhs.hasAudio) && deepEqualsMessages(lhs.audioCodec, rhs.audioCodec) && deepEqualsMessages(lhs.frameRate, rhs.frameRate) && deepEqualsMessages(lhs.audioTrackCount, rhs.audioTrackCount) && deepEqualsMessages(lhs.sizeBytes, rhs.sizeBytes)
   }
 
   func hash(into hasher: inout Hasher) {
@@ -654,6 +670,8 @@ struct VideoProbe: Hashable {
     deepHashMessages(value: hasAudio, hasher: &hasher)
     deepHashMessages(value: audioCodec, hasher: &hasher)
     deepHashMessages(value: frameRate, hasher: &hasher)
+    deepHashMessages(value: audioTrackCount, hasher: &hasher)
+    deepHashMessages(value: sizeBytes, hasher: &hasher)
   }
 }
 

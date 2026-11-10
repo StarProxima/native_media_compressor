@@ -11,7 +11,8 @@ internal object VideoProber {
         try {
             val formats = (0 until extractor.trackCount).map(extractor::getTrackFormat)
             val video = formats.firstOrNull { it.mime?.startsWith("video/") == true } ?: return null
-            val audio = formats.firstOrNull { it.mime?.startsWith("audio/") == true }
+            val audioFormats = formats.filter { it.mime?.startsWith("audio/") == true }
+            val audio = audioFormats.firstOrNull()
             val metadata = Metadata.read(source)
             val rotation = video.intOrNull(MediaFormat.KEY_ROTATION)?.let(Rotation::normalize) ?: metadata.rotation
             val stored = Size(video.getInteger(MediaFormat.KEY_WIDTH), video.getInteger(MediaFormat.KEY_HEIGHT))
@@ -32,6 +33,8 @@ internal object VideoProber {
                 // format's whole-number rate rounds off.
                 frameRate = FrameRate.average(metadata.frameCount, video.longOrNull(MediaFormat.KEY_DURATION))
                     ?: FrameRate.plausible(video.doubleOrNull(MediaFormat.KEY_FRAME_RATE)),
+                audioTrackCount = audioFormats.size.toLong(),
+                sizeBytes = source.sizeBytes(),
             )
         } finally {
             extractor.release()

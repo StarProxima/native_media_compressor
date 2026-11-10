@@ -38,6 +38,7 @@ abstract final class WebImage {
         height: header.height,
         frameCount: header.frameCount,
         mimeType: header.mimeType,
+        sizeBytes: blob.size,
       );
     }
     final mimeType = ImageHeaders.sniffMimeType(bytes);
@@ -51,6 +52,7 @@ abstract final class WebImage {
       height: size.$2,
       frameCount: await Browser.frameCount(blob, mimeType) ?? 1,
       mimeType: mimeType,
+      sizeBytes: blob.size,
     );
   }
 
