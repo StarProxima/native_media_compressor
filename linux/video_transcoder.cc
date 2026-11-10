@@ -1256,7 +1256,7 @@ Outcome TranscodeVideo(const VideoJob& job, const std::atomic<bool>& cancelled,
     PendingOutput output(job.destination);
     if (output.destination_is_directory()) return Failed("The destination is a directory");
     const GstApi* g = LoadGstApi();
-    if (g == nullptr) return Unsupported("GStreamer is not installed");
+    if (g == nullptr) return Unsupported("GStreamer 1.20 or newer is not installed");
     if (cancelled) return Cancelled();
     VideoJob pending = job;
     pending.destination = output.path();
@@ -1272,7 +1272,7 @@ Outcome VideoThumbnail(const ThumbnailJob& job) {
     PendingOutput output(job.destination);
     if (output.destination_is_directory()) return Failed("The destination is a directory");
     const GstApi* g = LoadGstApi();
-    if (g == nullptr) return Unsupported("GStreamer is not installed");
+    if (g == nullptr) return Unsupported("GStreamer 1.20 or newer is not installed");
     return output.Finish(Thumbnail(g, job, output.path()));
   } catch (const std::exception& error) {
     return Failed(error.what());
