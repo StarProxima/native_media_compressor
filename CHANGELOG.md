@@ -1,3 +1,17 @@
+## 1.1.0
+
+* `VideoMetadata.sizeBytes` and `ImageMetadata.sizeBytes` report the size of
+  the source, and `VideoMetadata.audioTrackCount` the number of its audio
+  tracks.
+* `minSavingsPercent` works for Android `content://` sources: their size
+  comes from the content provider.
+* An audio track the platform cannot decode is dropped instead of failing the
+  whole video, as long as another track is kept. Before, one AC-3 track next
+  to an AAC one made the file `unsupported` wherever no AC-3 decoder is
+  installed, such as on most Android devices and in Chrome.
+* Windows keeps the first audio track of a video with several instead of
+  answering `unsupported`.
+
 ## 1.0.0
 
 * **Breaking:** `CompressionResult.videoCodec` is a `VideoCodec` instead of a

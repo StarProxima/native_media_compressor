@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name             = 'native_media_compressor'
-  s.version          = '1.0.0'
+  s.version          = '1.1.0'
   s.summary          = "Compress images and videos with the platform's own codecs."
   s.description      = <<-DESC
 Compress images and videos with AVFoundation and ImageIO: no ffmpeg, no bundled encoders.
