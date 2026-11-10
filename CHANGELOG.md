@@ -9,6 +9,13 @@
   ends with `cancelled` instead of keeping the first pass as a finished
   compression.
 * `CompressionResult.toString` leaves out what is not set.
+* Android: HEVC is written only from Android 7, where the MP4 muxer takes it;
+  earlier versions fall back to H.264 instead of failing on the first frame.
+* Android: the foreground notification falls back to a system icon, not the
+  app icon, which Android 8.0 cannot show as a small icon; `iconResource` is
+  also looked up among mipmaps.
+* Android: a codec that is busy or reclaimed answers `interrupted`, not
+  `unsupported`, so the app knows to retry.
 * Documentation: `targetBytes` needs a readable duration, `minSavingsPercent`
   needs the source size (an Android `content://` source is always kept),
   which `ImageOptions` fields `videoThumbnail` uses, the Android service in

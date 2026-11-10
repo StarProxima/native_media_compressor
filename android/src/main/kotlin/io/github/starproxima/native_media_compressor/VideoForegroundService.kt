@@ -186,10 +186,15 @@ internal class VideoForegroundService : Service() {
         }
 
         private fun icon(context: Context, name: String?): Int {
-            val named = name?.let { context.resources.getIdentifier(it, "drawable", context.packageName) } ?: 0
-            if (named != 0) return named
-            val appIcon = context.applicationInfo.icon
-            return if (appIcon != 0) appIcon else android.R.drawable.stat_sys_upload
+            if (name != null) {
+                for (type in listOf("drawable", "mipmap")) {
+                    val id = context.resources.getIdentifier(name, type, context.packageName)
+                    if (id != 0) return id
+                }
+            }
+            // The app icon is usually adaptive, which Android 8.0 cannot show as a
+            // small icon and kills the app for; a system icon always draws.
+            return android.R.drawable.stat_sys_upload
         }
 
         private fun launchIntent(context: Context): PendingIntent? {
