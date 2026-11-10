@@ -1,3 +1,20 @@
+## 1.0.0
+
+* **Breaking:** `CompressionResult.videoCodec` is a `VideoCodec` instead of a
+  MIME string, so a fallback is `result.videoCodec == VideoCodec.h264`.
+  `VideoMetadata.videoCodec` stays a MIME type, as a probe can meet any codec.
+* **Breaking:** `VideoOptions.qualityPercent` is now `sourceBitratePercent`:
+  it is a share of the source bitrate, not an encoder quality.
+* A cancel between the two passes of `targetBytes`, or during the second one,
+  ends with `cancelled` instead of keeping the first pass as a finished
+  compression.
+* `CompressionResult.toString` leaves out what is not set.
+* Documentation: `targetBytes` needs a readable duration, `minSavingsPercent`
+  needs the source size (an Android `content://` source is always kept),
+  which `ImageOptions` fields `videoThumbnail` uses, the Android service in
+  the merged manifest and how to remove it, the macOS sandbox and output
+  folders.
+
 ## 0.2.0
 
 * Presets: `VideoOptions.light`, `balanced` and `strong`, and the same for
