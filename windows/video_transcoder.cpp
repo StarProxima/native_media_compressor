@@ -543,15 +543,37 @@ Outcome Run(const VideoJob& job, const std::wstring& output,
   ComPtr<IMFMediaType> decoded_audio;
   if (has_audio) {
     NMC_RETURN_IF_FAILED(reader->SetStreamSelection(kAudioStream, TRUE), "Selecting the audio");
+    // The AAC encoder takes only 44.1 or 48 kHz and up to two channels (six
+    // too, but a stereo downmix plays everywhere). The source reader resamples
+    // and downmixes on request; a source it cannot convert is decoded as it
+    // is, and the encoder then decides.
+    ComPtr<IMFMediaType> native_audio;
+    UINT32 native_rate = 0;
+    UINT32 native_channels = 0;
+    if (SUCCEEDED(reader->GetNativeMediaType(kAudioStream, 0, &native_audio))) {
+      native_rate = MFGetAttributeUINT32(native_audio.Get(), MF_MT_AUDIO_SAMPLES_PER_SECOND, 0);
+      native_channels = MFGetAttributeUINT32(native_audio.Get(), MF_MT_AUDIO_NUM_CHANNELS, 0);
+    }
     ComPtr<IMFMediaType> pcm;
     NMC_RETURN_IF_FAILED(MFCreateMediaType(&pcm), "Creating the PCM type");
     NMC_RETURN_IF_FAILED(pcm->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio), "Creating the PCM type");
     NMC_RETURN_IF_FAILED(pcm->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_PCM), "Creating the PCM type");
     NMC_RETURN_IF_FAILED(pcm->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE, 16), "Creating the PCM type");
-    if (const HRESULT result = reader->SetCurrentMediaType(kAudioStream, nullptr, pcm.Get());
-        FAILED(result)) {
+    NMC_RETURN_IF_FAILED(pcm->SetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND,
+                                        native_rate == 44100 ? 44100 : 48000),
+                         "Creating the PCM type");
+    NMC_RETURN_IF_FAILED(
+        pcm->SetUINT32(MF_MT_AUDIO_NUM_CHANNELS, native_channels == 1 ? 1 : 2),
+        "Creating the PCM type");
+    HRESULT decoded = reader->SetCurrentMediaType(kAudioStream, nullptr, pcm.Get());
+    if (FAILED(decoded)) {
+      pcm->DeleteItem(MF_MT_AUDIO_SAMPLES_PER_SECOND);
+      pcm->DeleteItem(MF_MT_AUDIO_NUM_CHANNELS);
+      decoded = reader->SetCurrentMediaType(kAudioStream, nullptr, pcm.Get());
+    }
+    if (FAILED(decoded)) {
       return Outcome::Of(Status::kUnsupported,
-                         DescribeHresult("Finding a decoder for the audio track", result));
+                         DescribeHresult("Finding a decoder for the audio track", decoded));
     }
     NMC_RETURN_IF_FAILED(reader->GetCurrentMediaType(kAudioStream, &decoded_audio),
                          "Reading the decoded audio type");
