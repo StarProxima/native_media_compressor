@@ -69,8 +69,11 @@ enum ContainerAudio {
         var offset = chunkOffsets[chunk]
         for _ in 0..<run.samples {
           guard sample < sizes.count else { return ranges }
-          ranges.append(offset..<(offset + sizes[sample]))
-          offset += sizes[sample]
+          // Offsets and sizes are untrusted 64-bit values from the file.
+          let (end, overflow) = offset.addingReportingOverflow(sizes[sample])
+          guard !overflow else { return nil }
+          ranges.append(offset..<end)
+          offset = end
           sample += 1
         }
       }
@@ -222,7 +225,8 @@ enum ContainerAudio {
       } else if size == 0 {
         size = fileSize - offset
       }
-      guard size >= headerSize, offset + size <= fileSize else { return nil }
+      // Sizes come from the file; the subtraction cannot overflow, a sum could.
+      guard size >= headerSize, size <= fileSize - offset else { return nil }
       if fourCC(header, at: 4) == "moov" {
         guard size - headerSize <= maxMovieBoxSize else { return nil }
         file.seek(toFileOffset: offset + headerSize)
