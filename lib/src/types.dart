@@ -97,9 +97,10 @@ final class AndroidForegroundNotification {
 /// [audioBitrate] where the platform has an AAC encoder.
 ///
 /// The video bitrate comes from the first of [targetBytes], [videoBitrate]
-/// and [qualityPercent] that is set, and otherwise from [bitsPerPixel]. It
-/// stays below the bitrate of the source video. Encoders may still overshoot
-/// it on short clips; [minSavingsPercent] guarantees a smaller output.
+/// and [sourceBitratePercent] that is set, and otherwise from
+/// [bitsPerPixel]. It stays below the bitrate of the source video. Encoders
+/// may still overshoot it on short clips; [minSavingsPercent] guarantees a
+/// smaller output.
 ///
 /// [light], [balanced] and [strong] are ready settings for the usual cases.
 final class VideoOptions {
@@ -108,7 +109,7 @@ final class VideoOptions {
     this.maxShortSide = 720,
     this.maxLongSide,
     this.videoBitrate,
-    this.qualityPercent,
+    this.sourceBitratePercent,
     this.targetBytes,
     this.bitsPerPixel = 0.07,
     this.maxFrameRate = 30,
@@ -126,8 +127,8 @@ final class VideoOptions {
        assert(maxLongSide == null || maxLongSide > 0),
        assert(videoBitrate == null || videoBitrate > 0),
        assert(
-         qualityPercent == null ||
-             (qualityPercent > 0 && qualityPercent <= 100),
+         sourceBitratePercent == null ||
+             (sourceBitratePercent > 0 && sourceBitratePercent <= 100),
        ),
        assert(targetBytes == null || targetBytes > 0),
        assert(bitsPerPixel > 0),
@@ -163,13 +164,16 @@ final class VideoOptions {
   final int? videoBitrate;
 
   /// Video bitrate as a percentage of the source video bitrate, from 1 to
-  /// 100.
-  final int? qualityPercent;
+  /// 100. Not an encoder quality: 50 asks for half the bitrate the source
+  /// has, whatever that is.
+  final int? sourceBitratePercent;
 
   /// Desired output size in bytes. The video bitrate is derived from the
   /// duration so that video and copied audio add up to about this size;
   /// encoders land within a few percent, so set [maxBytes] as well when the
-  /// size is a hard limit.
+  /// size is a hard limit. Needs the duration from `probeVideo`; a source the
+  /// probe cannot read is compressed at [videoBitrate] or the default
+  /// bitrate instead.
   final int? targetBytes;
 
   /// Bits of video per pixel per frame for the automatic bitrate: 0.07 keeps
@@ -177,8 +181,8 @@ final class VideoOptions {
   /// source.
   final double bitsPerPixel;
 
-  /// Frames above this rate are dropped where the platform supports it.
-  /// Values above 240 are treated as 240.
+  /// Frames above this rate are dropped. Values above 240 are treated as
+  /// 240.
   final int? maxFrameRate;
 
   /// Compression stops with [CompressionStatus.tooLarge] as soon as the output
@@ -187,7 +191,8 @@ final class VideoOptions {
 
   /// When set, an output that is not at least this many percent smaller
   /// than the source is dropped with [CompressionStatus.skipped]; 0 drops
-  /// only outputs that are not smaller at all.
+  /// only outputs that are not smaller at all. Needs the source size, so
+  /// an Android `content://` source is always kept.
   final int? minSavingsPercent;
 
   /// Whether to keep the audio tracks.
@@ -215,7 +220,7 @@ final class VideoOptions {
     int? maxShortSide,
     int? maxLongSide,
     int? videoBitrate,
-    int? qualityPercent,
+    int? sourceBitratePercent,
     int? targetBytes,
     double? bitsPerPixel,
     int? maxFrameRate,
@@ -231,7 +236,7 @@ final class VideoOptions {
     maxShortSide: maxShortSide ?? this.maxShortSide,
     maxLongSide: maxLongSide ?? this.maxLongSide,
     videoBitrate: videoBitrate ?? this.videoBitrate,
-    qualityPercent: qualityPercent ?? this.qualityPercent,
+    sourceBitratePercent: sourceBitratePercent ?? this.sourceBitratePercent,
     targetBytes: targetBytes ?? this.targetBytes,
     bitsPerPixel: bitsPerPixel ?? this.bitsPerPixel,
     maxFrameRate: maxFrameRate ?? this.maxFrameRate,
@@ -300,7 +305,8 @@ final class ImageOptions {
 
   /// When set, an output that is not at least this many percent smaller
   /// than the source is dropped with [CompressionStatus.skipped]; 0 drops
-  /// only outputs that are not smaller at all.
+  /// only outputs that are not smaller at all. Needs the source size, so
+  /// an Android `content://` source is always kept.
   final int? minSavingsPercent;
 
   /// Copy the source's EXIF metadata, such as the camera, the capture time
@@ -362,17 +368,26 @@ final class CompressionResult {
   /// Platform details about a failure, for logs.
   final String? message;
 
-  /// Codec of the written video track as a MIME type, `video/avc` or
-  /// `video/hevc`; null for images.
-  final String? videoCodec;
+  /// Codec of the written video track: [VideoCodec.h264] when HEVC was asked
+  /// for but the platform has no encoder for it. Null for images and when
+  /// nothing was written.
+  final VideoCodec? videoCodec;
 
   /// Whether the output was written.
   bool get isCompressed => status == CompressionStatus.compressed;
 
   @override
-  String toString() =>
-      'CompressionResult($status, path: $path, ${width}x$height, '
-      'sizeBytes: $sizeBytes${message == null ? '' : ', message: $message'})';
+  String toString() {
+    final buffer = StringBuffer('CompressionResult(${status.name}');
+    if (path != null) buffer.write(', path: $path');
+    if (width != null || height != null) buffer.write(', ${width}x$height');
+    if (sizeBytes != null) buffer.write(', sizeBytes: $sizeBytes');
+    if (videoCodec != null) buffer.write(', videoCodec: ${videoCodec!.name}');
+    if (message != null) buffer.write(', message: $message');
+    buffer.write(')');
+
+    return buffer.toString();
+  }
 }
 
 /// What [VideoOptions] would produce for a source, computed from its

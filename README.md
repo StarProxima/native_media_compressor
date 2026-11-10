@@ -47,6 +47,7 @@ Two other packages also use the system codecs instead of ffmpeg. As of November 
 | HDR video to SDR | Android 7+, iOS 14+, macOS 11+, web | not documented | iOS, macOS, Android 13+ |
 | Android `content://` sources | yes | no, file paths | not documented |
 | Failures | a status, never an exception | exceptions | result classes |
+| Batch and save-to-gallery helpers | no, one call per file | yes | yes |
 | Added to an arm64 APK | about 180 KB | about 530 KB | about 65 KB |
 | Added to an iOS app | about 680 KB | about 555 KB | about 430 KB |
 
@@ -124,7 +125,7 @@ A format the platform cannot write returns `unsupported` and writes nothing; it 
 flutter pub add native_media_compressor
 ```
 
-The package asks for no permissions and needs no manifest changes: it reads and writes only the paths you pass, so your app needs access to them. On Linux, install the GStreamer development headers before building, see [Platform notes](#platform-notes).
+The package asks for no permissions and needs no manifest changes: it reads and writes only the paths you pass, so your app needs access to them. On Linux, install the GStreamer development headers before building, see [Platform notes](#platform-notes). On Android the package's manifest declares the foreground service for [Background work](#platform-notes); it is inert until you opt in, and it can be removed, see there.
 
 ## Usage
 
@@ -194,7 +195,7 @@ NativeMediaCompressor.compressVideo(
 );
 ```
 
-Encoders do not always keep to the requested bitrate, so when the output misses the target by more than 8% the video is encoded once more at a corrected bitrate, and the closer of the two results is kept. Add `maxBytes` when the size is a hard limit, such as an upload cap. For images, `ImageOptions.targetBytes` lowers JPEG quality and then the image size until the output fits, in at most eight encodes.
+Encoders do not always keep to the requested bitrate, so when the output misses the target by more than 8% the video is encoded once more at a corrected bitrate, and the closer of the two results is kept. Add `maxBytes` when the size is a hard limit, such as an upload cap. The target needs the duration from the probe: a video whose headers cannot be read is compressed at the default bitrate instead. For images, `ImageOptions.targetBytes` lowers JPEG quality and then the image size until the output fits, in at most eight encodes.
 
 ### Keep the original when compression does not pay off
 
@@ -202,7 +203,7 @@ Encoders do not always keep to the requested bitrate, so when the output misses 
 const options = VideoOptions(minSavingsPercent: 20);
 ```
 
-An output that is not at least 20% smaller than the source is dropped and the call returns `CompressionStatus.skipped`; `destination` stays as it was. `0` drops only outputs that are not smaller at all.
+An output that is not at least 20% smaller than the source is dropped and the call returns `CompressionStatus.skipped`; `destination` stays as it was. `0` drops only outputs that are not smaller at all. The rule needs the source size, so an Android `content://` source is always kept.
 
 ### Trim, rotate and pick the codec
 
@@ -215,7 +216,7 @@ const options = VideoOptions(
 );
 ```
 
-The bitrate, the estimate and a target size all take the trimmed length into account. HEVC gets about 70% of the H.264 bitrate for the same quality.
+The bitrate, the estimate and a target size all take the trimmed length into account. HEVC gets about 70% of the H.264 bitrate for the same quality; `result.videoCodec` is `VideoCodec.h264` when the platform had no HEVC encoder.
 
 ### Save a frame
 
@@ -276,7 +277,7 @@ await NativeMediaCompressor.compressImage(source: path, destination: path);
 | `maxLongSide` | `null` | Upper bound for the longer side, in pixels. |
 | `targetBytes` | `null` | Desired output size; the video bitrate is derived from it. |
 | `videoBitrate` | `null` | Video bitrate, in bits per second. |
-| `qualityPercent` | `null` | Video bitrate as a percentage of the source's. |
+| `sourceBitratePercent` | `null` | Video bitrate as a percentage of the source's; not an encoder quality. |
 | `bitsPerPixel` | `0.07` | Bitrate per pixel per frame when none of the three above is set. |
 | `maxFrameRate` | `30` | Frames above this rate are dropped. Capped at 240. |
 | `maxBytes` | `null` | Stop with `tooLarge` as soon as the output exceeds this size. |
@@ -287,7 +288,7 @@ await NativeMediaCompressor.compressImage(source: path, destination: path);
 | `trimStart`, `trimEnd` | `null` | Keep only this part of the video. |
 | `rotateQuarterTurns` | `0` | Clockwise quarter turns on top of the displayed orientation. |
 
-The frame is scaled down to fit both bounds, keeping its aspect ratio, and never scaled up. The bitrate comes from the first of `targetBytes`, `videoBitrate` and `qualityPercent` that is set, then from `bitsPerPixel`, and stays below 85% of the source video bitrate.
+The frame is scaled down to fit both bounds, keeping its aspect ratio, and never scaled up. The bitrate comes from the first of `targetBytes`, `videoBitrate` and `sourceBitratePercent` that is set, then from `bitsPerPixel`, and stays below 85% of the source video bitrate.
 
 ### `ImageOptions`
 
@@ -327,7 +328,7 @@ Every status except `compressed` leaves `destination` as it was.
 
 **Android.** `source` may be a `content://` URI. HEIC decoding needs Android 9 or newer.
 
-**iOS and macOS.** Works with both Swift Package Manager and CocoaPods. HDR conversion needs iOS 14 or macOS 11.
+**iOS and macOS.** Works with both Swift Package Manager and CocoaPods. HDR conversion needs iOS 14 or macOS 11. In a sandboxed macOS app, a file the user picked in a save panel grants access to that one path and not to its folder, while the output is staged in a temporary file next to `destination`; write into the app's container or a folder the app has access to, and let the user move the result.
 
 **Windows.** Video needs Media Foundation, which Windows N editions only have with the Media Feature Pack; without it video calls return `unsupported` and the app still starts. HEVC video, HEIC and WebP need the matching codec extensions from the Microsoft Store; without them those inputs are `unsupported`.
 
@@ -357,7 +358,13 @@ The app declares what the service needs; the package itself requests no permissi
 <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 ```
 
-Without them, or when the system refuses to start the service, videos run as before.
+Without them, or when the system refuses to start the service, videos run as before. Give `iconResource` a monochrome drawable of your app, as every status-bar icon; without one the notification shows a generic system icon. The service itself is declared in the package's manifest with the type `dataSync`, so it lands in your merged manifest whether you opt in or not; an app that never compresses videos in the background can take it out:
+
+```xml
+<service
+    android:name="io.github.starproxima.native_media_compressor.VideoForegroundService"
+    tools:node="remove" />
+```
 
 ## Example
 

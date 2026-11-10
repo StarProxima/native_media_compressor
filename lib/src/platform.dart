@@ -272,7 +272,11 @@ class PigeonMediaCompressor extends NativeMediaCompressorPlatform
         height: reply.height,
         sizeBytes: reply.sizeBytes,
         message: reply.message,
-        videoCodec: reply.videoCodec,
+        videoCodec: switch (reply.videoCodec) {
+          'video/avc' => VideoCodec.h264,
+          'video/hevc' => VideoCodec.hevc,
+          _ => null,
+        },
       );
     } on PlatformException catch (error) {
       return CompressionResult(

@@ -904,12 +904,15 @@ void main() {
           ).result;
 
       expect(hevc.status, CompressionStatus.compressed, reason: '$hevc');
-      expect(avc.videoCodec, 'video/avc');
-      if (_isAndroid || _isApple) expect(hevc.videoCodec, 'video/hevc');
-      expect(hevc.videoCodec, anyOf('video/hevc', 'video/avc'));
+      expect(avc.videoCodec, VideoCodec.h264);
+      if (_isAndroid || _isApple) expect(hevc.videoCodec, VideoCodec.hevc);
+      expect(hevc.videoCodec, isNotNull);
       final probe = await NativeMediaCompressor.probeVideo(_at(hevc, hevcPath));
-      expect(probe!.videoCodec, hevc.videoCodec);
-      if (hevc.videoCodec == 'video/hevc') {
+      expect(
+        probe!.videoCodec,
+        hevc.videoCodec == VideoCodec.hevc ? 'video/hevc' : 'video/avc',
+      );
+      if (hevc.videoCodec == VideoCodec.hevc) {
         expect(hevc.sizeBytes, lessThan(avc.sizeBytes!));
       }
     });
