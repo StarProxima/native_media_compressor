@@ -10,7 +10,8 @@ enum ImageCodec {
       width: Int64(header.width),
       height: Int64(header.height),
       frameCount: Int64(CGImageSourceGetCount(source)),
-      mimeType: CGImageSourceGetType(source).flatMap { mimeTypes[$0 as String] })
+      mimeType: CGImageSourceGetType(source).flatMap { mimeTypes[$0 as String] },
+      sizeBytes: URL(fileURLWithPath: path).knownFileSize)
   }
 
   static func compress(_ request: ImageRequest) -> CompressionReply {

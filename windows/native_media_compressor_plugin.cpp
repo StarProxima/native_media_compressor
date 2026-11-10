@@ -156,6 +156,7 @@ void NativeMediaCompressorPlugin::ProbeImage(
       if (const auto info = ProbeImageFile(path)) {
         probe.emplace(info->width, info->height, info->frame_count);
         if (info->mime_type) probe->set_mime_type(*info->mime_type);
+        if (info->size_bytes) probe->set_size_bytes(*info->size_bytes);
       }
     } catch (...) {
       probe.reset();
@@ -178,6 +179,8 @@ void NativeMediaCompressorPlugin::ProbeVideo(
         if (info->video_codec) probe->set_video_codec(*info->video_codec);
         if (info->audio_codec) probe->set_audio_codec(*info->audio_codec);
         if (info->frame_rate) probe->set_frame_rate(*info->frame_rate);
+        probe->set_audio_track_count(info->audio_track_count);
+        if (info->size_bytes) probe->set_size_bytes(*info->size_bytes);
       }
     } catch (...) {
       probe.reset();

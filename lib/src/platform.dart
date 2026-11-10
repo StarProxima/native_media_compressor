@@ -163,6 +163,7 @@ class PigeonMediaCompressor extends NativeMediaCompressorPlatform
         height: probe.height,
         frameCount: probe.frameCount,
         mimeType: probe.mimeType,
+        sizeBytes: probe.sizeBytes,
       );
     } on PlatformException {
       return null;
@@ -188,6 +189,8 @@ class PigeonMediaCompressor extends NativeMediaCompressorPlatform
         isHdr: probe.isHdr,
         audioCodec: probe.audioCodec,
         frameRate: probe.frameRate,
+        audioTrackCount: probe.audioTrackCount,
+        sizeBytes: probe.sizeBytes,
       );
     } on PlatformException {
       return null;

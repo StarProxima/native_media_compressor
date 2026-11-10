@@ -79,6 +79,13 @@ ff -f lavfi -i "$SMALL" -c:v libvpx-vp9 -b:v 400k format_vp9.webm
 ff -f lavfi -i "$SMALL" -c:v libvpx-vp9 -b:v 400k format_vp9.mp4
 ff -f lavfi -i "$SMALL" -c:v libsvtav1 -b:v 400k -pix_fmt yuv420p format_av1.mp4
 
+# AAC plus an AC-3 track, which Android, Chrome and a bare GStreamer cannot
+# decode: the readable track has to be kept and the other dropped, not the
+# file failed.
+ff -f lavfi -i "$SMALL" -f lavfi -i "$TONE:duration=1" -f lavfi -i "sine=frequency=660:sample_rate=48000:duration=1" \
+  -map 0:v -map 1:a -map 2:a -c:v libx264 -preset veryfast -b:v 400k -pix_fmt yuv420p \
+  -c:a:0 aac -b:a:0 64k -c:a:1 ac3 -b:a:1 96k mixed_audio_tracks.mp4
+
 # Still images in the formats the readme lists beyond JPEG, PNG, WebP, GIF and HEIC.
 ff -f lavfi -i "testsrc2=size=320x240:duration=1" -frames:v 1 -c:v bmp format.bmp
 ff -f lavfi -i "testsrc2=size=320x240:duration=1" -frames:v 1 -c:v tiff -pix_fmt rgb24 -compression_algo lzw format.tiff

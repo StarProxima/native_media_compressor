@@ -106,8 +106,14 @@ internal class VideoTranscoder(
             // Decoders tone-map on request only from API 31; the shader does it otherwise.
             val toneMapInShader = transfer.isHdr && (shaderTransfer != null || Build.VERSION.SDK_INT < Build.VERSION_CODES.S)
             // Only audio tracks matter: screen recordings also carry data tracks without a codec.
-            val audioTracks = if (request.includeAudio) videoExtractor.tracks("audio/") else emptyList()
-            val audioFormats = audioTracks.map(videoExtractor::getTrackFormat)
+            val sourceAudioTracks = if (request.includeAudio) videoExtractor.tracks("audio/") else emptyList()
+            // A track no decoder takes (AC-3 on many devices) is left out instead of failing
+            // the whole file, as long as some audio is kept.
+            val audioTracks = sourceAudioTracks.map { it to videoExtractor.getTrackFormat(it) }
+                .filter { (_, format) -> format.mime == MediaFormat.MIMETYPE_AUDIO_AAC || hasAudioDecoder(format) }
+            if (sourceAudioTracks.isNotEmpty() && audioTracks.isEmpty()) {
+                throw Stop(CompressionStatus.UNSUPPORTED, "no decoder for any audio track")
+            }
             videoExtractor.selectTrack(videoTrack)
 
             val stored = Size(sourceFormat.getInteger(MediaFormat.KEY_WIDTH), sourceFormat.getInteger(MediaFormat.KEY_HEIGHT))
@@ -175,7 +181,7 @@ internal class VideoTranscoder(
             // A screen recording with a microphone carries system sound and voice as
             // separate tracks: all of them are kept, or the voice would be lost.
             val audioBitrate = request.audioBitrate.coerceIn(1, Int.MAX_VALUE.toLong()).toInt()
-            for ((track, format) in audioTracks.zip(audioFormats)) {
+            for ((track, format) in audioTracks) {
                 val extractor = source.openExtractor().also(extractors::add)
                 extractor.selectTrack(track)
                 // Audio samples are all sync samples, so this lands at the start or just before it.
@@ -800,6 +806,10 @@ internal class VideoTranscoder(
         } else {
             runCatching { MediaCodecList(MediaCodecList.REGULAR_CODECS).findDecoderForFormat(format) }.getOrNull()
         }
+
+        // Audio formats carry no frame rate, so the lookup works from API 21 here.
+        private fun hasAudioDecoder(format: MediaFormat): Boolean =
+            runCatching { MediaCodecList(MediaCodecList.REGULAR_CODECS).findDecoderForFormat(format) }.getOrNull() != null
 
         private fun hevcBaseLayer(format: MediaFormat): MediaFormat {
             val width = format.getInteger(MediaFormat.KEY_WIDTH)

@@ -337,6 +337,7 @@ std::optional<ImageInfo> ProbeImageFile(const std::string& path) {
     info.width = swapped ? height : width;
     info.height = swapped ? width : height;
     info.frame_count = FrameCount(path, info.mime_type);
+    if (const int64_t size = FileSize(path); size >= 0) info.size_bytes = size;
     return info;
   } catch (const std::exception&) {
     return std::nullopt;

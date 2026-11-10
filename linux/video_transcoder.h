@@ -39,6 +39,8 @@ struct VideoInfo {
   bool has_audio = false;
   std::string audio_codec;
   std::optional<double> frame_rate;
+  int64_t audio_track_count = 0;
+  std::optional<int64_t> size_bytes;
 };
 
 struct ThumbnailJob {

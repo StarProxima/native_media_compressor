@@ -41,6 +41,8 @@ abstract final class WebVideoProbe {
       isHdr: video.isHdr,
       audioCodec: audio.isEmpty ? null : audio.first.mimeType,
       frameRate: video.frameRate,
+      audioTrackCount: audio.length,
+      sizeBytes: file.length,
     );
   }
 }
@@ -221,14 +223,10 @@ final class WebVideoJob {
       );
     }
 
+    final sourceAudio = options.includeAudio ? movie.audio : <Mp4Track>[];
     final audio = <(Mp4Track, AacTranscoder?)>[];
-    for (final track in options.includeAudio ? movie.audio : <Mp4Track>[]) {
-      if (track.timescale <= 0) {
-        throw _Stop(
-          CompressionStatus.unsupported,
-          'audio ${track.mimeType} has no timescale',
-        );
-      }
+    for (final track in sourceAudio) {
+      if (track.timescale <= 0) continue;
       if (track.isAac && track.esds != null) {
         audio.add((track, null));
         continue;
@@ -237,15 +235,16 @@ final class WebVideoJob {
         track,
         options.audioBitrate,
       );
-      if (transcoder == null) {
-        throw _Stop(
-          CompressionStatus.unsupported,
-          'audio ${track.mimeType} cannot be re-encoded to AAC in this '
-          'browser',
-        );
-      }
+      if (transcoder == null) continue;
       _transcoders.add(transcoder);
       audio.add((track, transcoder));
+    }
+    if (sourceAudio.isNotEmpty && audio.isEmpty) {
+      final codecs = sourceAudio.map((track) => track.mimeType).join(', ');
+      throw _Stop(
+        CompressionStatus.unsupported,
+        'no audio track can be re-encoded to AAC in this browser: $codecs',
+      );
     }
     _check();
 

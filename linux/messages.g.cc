@@ -1192,6 +1192,7 @@ struct _NmcImageProbe {
   int64_t height;
   int64_t frame_count;
   gchar* mime_type;
+  int64_t* size_bytes;
 };
 
 G_DEFINE_TYPE(NmcImageProbe, nmc_image_probe, G_TYPE_OBJECT)
@@ -1199,6 +1200,7 @@ G_DEFINE_TYPE(NmcImageProbe, nmc_image_probe, G_TYPE_OBJECT)
 static void nmc_image_probe_dispose(GObject* object) {
   NmcImageProbe* self = NMC_IMAGE_PROBE(object);
   g_clear_pointer(&self->mime_type, g_free);
+  g_clear_pointer(&self->size_bytes, g_free);
   G_OBJECT_CLASS(nmc_image_probe_parent_class)->dispose(object);
 }
 
@@ -1209,7 +1211,7 @@ static void nmc_image_probe_class_init(NmcImageProbeClass* klass) {
   G_OBJECT_CLASS(klass)->dispose = nmc_image_probe_dispose;
 }
 
-NmcImageProbe* nmc_image_probe_new(int64_t width, int64_t height, int64_t frame_count, const gchar* mime_type) {
+NmcImageProbe* nmc_image_probe_new(int64_t width, int64_t height, int64_t frame_count, const gchar* mime_type, int64_t* size_bytes) {
   NmcImageProbe* self = NMC_IMAGE_PROBE(g_object_new(nmc_image_probe_get_type(), nullptr));
   self->width = width;
   self->height = height;
@@ -1219,6 +1221,13 @@ NmcImageProbe* nmc_image_probe_new(int64_t width, int64_t height, int64_t frame_
   }
   else {
     self->mime_type = nullptr;
+  }
+  if (size_bytes != nullptr) {
+    self->size_bytes = static_cast<int64_t*>(malloc(sizeof(int64_t)));
+    *self->size_bytes = *size_bytes;
+  }
+  else {
+    self->size_bytes = nullptr;
   }
   return self;
 }
@@ -1243,12 +1252,18 @@ const gchar* nmc_image_probe_get_mime_type(NmcImageProbe* self) {
   return self->mime_type;
 }
 
+int64_t* nmc_image_probe_get_size_bytes(NmcImageProbe* self) {
+  g_return_val_if_fail(NMC_IS_IMAGE_PROBE(self), nullptr);
+  return self->size_bytes;
+}
+
 static FlValue* nmc_image_probe_to_list(NmcImageProbe* self) {
   FlValue* values = fl_value_new_list();
   fl_value_append_take(values, fl_value_new_int(self->width));
   fl_value_append_take(values, fl_value_new_int(self->height));
   fl_value_append_take(values, fl_value_new_int(self->frame_count));
   fl_value_append_take(values, self->mime_type != nullptr ? fl_value_new_string(self->mime_type) : fl_value_new_null());
+  fl_value_append_take(values, self->size_bytes != nullptr ? fl_value_new_int(*self->size_bytes) : fl_value_new_null());
   return values;
 }
 
@@ -1264,7 +1279,14 @@ static NmcImageProbe* nmc_image_probe_new_from_list(FlValue* values) {
   if (fl_value_get_type(value3) != FL_VALUE_TYPE_NULL) {
     mime_type = fl_value_get_string(value3);
   }
-  return nmc_image_probe_new(width, height, frame_count, mime_type);
+  FlValue* value4 = fl_value_get_list_value(values, 4);
+  int64_t* size_bytes = nullptr;
+  int64_t size_bytes_value;
+  if (fl_value_get_type(value4) != FL_VALUE_TYPE_NULL) {
+    size_bytes_value = fl_value_get_int(value4);
+    size_bytes = &size_bytes_value;
+  }
+  return nmc_image_probe_new(width, height, frame_count, mime_type, size_bytes);
 }
 
 gboolean nmc_image_probe_equals(NmcImageProbe* a, NmcImageProbe* b) {
@@ -1286,6 +1308,12 @@ gboolean nmc_image_probe_equals(NmcImageProbe* a, NmcImageProbe* b) {
   if (g_strcmp0(a->mime_type, b->mime_type) != 0) {
     return FALSE;
   }
+  if ((a->size_bytes == nullptr) != (b->size_bytes == nullptr)) {
+    return FALSE;
+  }
+  if (a->size_bytes != nullptr && *a->size_bytes != *b->size_bytes) {
+    return FALSE;
+  }
   return TRUE;
 }
 
@@ -1296,6 +1324,7 @@ guint nmc_image_probe_hash(NmcImageProbe* self) {
   result = result * 31 + static_cast<guint>(self->height);
   result = result * 31 + static_cast<guint>(self->frame_count);
   result = result * 31 + (self->mime_type != nullptr ? g_str_hash(self->mime_type) : 0);
+  result = result * 31 + (self->size_bytes != nullptr ? static_cast<guint>(*self->size_bytes) : 0);
   return result;
 }
 
@@ -1312,6 +1341,8 @@ struct _NmcVideoProbe {
   gboolean has_audio;
   gchar* audio_codec;
   double* frame_rate;
+  int64_t* audio_track_count;
+  int64_t* size_bytes;
 };
 
 G_DEFINE_TYPE(NmcVideoProbe, nmc_video_probe, G_TYPE_OBJECT)
@@ -1322,6 +1353,8 @@ static void nmc_video_probe_dispose(GObject* object) {
   g_clear_pointer(&self->video_codec, g_free);
   g_clear_pointer(&self->audio_codec, g_free);
   g_clear_pointer(&self->frame_rate, g_free);
+  g_clear_pointer(&self->audio_track_count, g_free);
+  g_clear_pointer(&self->size_bytes, g_free);
   G_OBJECT_CLASS(nmc_video_probe_parent_class)->dispose(object);
 }
 
@@ -1332,7 +1365,7 @@ static void nmc_video_probe_class_init(NmcVideoProbeClass* klass) {
   G_OBJECT_CLASS(klass)->dispose = nmc_video_probe_dispose;
 }
 
-NmcVideoProbe* nmc_video_probe_new(int64_t width, int64_t height, int64_t rotation_degrees, int64_t duration_ms, int64_t* bitrate, const gchar* video_codec, gboolean is_hdr, gboolean has_audio, const gchar* audio_codec, double* frame_rate) {
+NmcVideoProbe* nmc_video_probe_new(int64_t width, int64_t height, int64_t rotation_degrees, int64_t duration_ms, int64_t* bitrate, const gchar* video_codec, gboolean is_hdr, gboolean has_audio, const gchar* audio_codec, double* frame_rate, int64_t* audio_track_count, int64_t* size_bytes) {
   NmcVideoProbe* self = NMC_VIDEO_PROBE(g_object_new(nmc_video_probe_get_type(), nullptr));
   self->width = width;
   self->height = height;
@@ -1365,6 +1398,20 @@ NmcVideoProbe* nmc_video_probe_new(int64_t width, int64_t height, int64_t rotati
   }
   else {
     self->frame_rate = nullptr;
+  }
+  if (audio_track_count != nullptr) {
+    self->audio_track_count = static_cast<int64_t*>(malloc(sizeof(int64_t)));
+    *self->audio_track_count = *audio_track_count;
+  }
+  else {
+    self->audio_track_count = nullptr;
+  }
+  if (size_bytes != nullptr) {
+    self->size_bytes = static_cast<int64_t*>(malloc(sizeof(int64_t)));
+    *self->size_bytes = *size_bytes;
+  }
+  else {
+    self->size_bytes = nullptr;
   }
   return self;
 }
@@ -1419,6 +1466,16 @@ double* nmc_video_probe_get_frame_rate(NmcVideoProbe* self) {
   return self->frame_rate;
 }
 
+int64_t* nmc_video_probe_get_audio_track_count(NmcVideoProbe* self) {
+  g_return_val_if_fail(NMC_IS_VIDEO_PROBE(self), nullptr);
+  return self->audio_track_count;
+}
+
+int64_t* nmc_video_probe_get_size_bytes(NmcVideoProbe* self) {
+  g_return_val_if_fail(NMC_IS_VIDEO_PROBE(self), nullptr);
+  return self->size_bytes;
+}
+
 static FlValue* nmc_video_probe_to_list(NmcVideoProbe* self) {
   FlValue* values = fl_value_new_list();
   fl_value_append_take(values, fl_value_new_int(self->width));
@@ -1431,6 +1488,8 @@ static FlValue* nmc_video_probe_to_list(NmcVideoProbe* self) {
   fl_value_append_take(values, fl_value_new_bool(self->has_audio));
   fl_value_append_take(values, self->audio_codec != nullptr ? fl_value_new_string(self->audio_codec) : fl_value_new_null());
   fl_value_append_take(values, self->frame_rate != nullptr ? fl_value_new_float(*self->frame_rate) : fl_value_new_null());
+  fl_value_append_take(values, self->audio_track_count != nullptr ? fl_value_new_int(*self->audio_track_count) : fl_value_new_null());
+  fl_value_append_take(values, self->size_bytes != nullptr ? fl_value_new_int(*self->size_bytes) : fl_value_new_null());
   return values;
 }
 
@@ -1471,7 +1530,21 @@ static NmcVideoProbe* nmc_video_probe_new_from_list(FlValue* values) {
     frame_rate_value = fl_value_get_float(value9);
     frame_rate = &frame_rate_value;
   }
-  return nmc_video_probe_new(width, height, rotation_degrees, duration_ms, bitrate, video_codec, is_hdr, has_audio, audio_codec, frame_rate);
+  FlValue* value10 = fl_value_get_list_value(values, 10);
+  int64_t* audio_track_count = nullptr;
+  int64_t audio_track_count_value;
+  if (fl_value_get_type(value10) != FL_VALUE_TYPE_NULL) {
+    audio_track_count_value = fl_value_get_int(value10);
+    audio_track_count = &audio_track_count_value;
+  }
+  FlValue* value11 = fl_value_get_list_value(values, 11);
+  int64_t* size_bytes = nullptr;
+  int64_t size_bytes_value;
+  if (fl_value_get_type(value11) != FL_VALUE_TYPE_NULL) {
+    size_bytes_value = fl_value_get_int(value11);
+    size_bytes = &size_bytes_value;
+  }
+  return nmc_video_probe_new(width, height, rotation_degrees, duration_ms, bitrate, video_codec, is_hdr, has_audio, audio_codec, frame_rate, audio_track_count, size_bytes);
 }
 
 gboolean nmc_video_probe_equals(NmcVideoProbe* a, NmcVideoProbe* b) {
@@ -1517,6 +1590,18 @@ gboolean nmc_video_probe_equals(NmcVideoProbe* a, NmcVideoProbe* b) {
   if (a->frame_rate != nullptr && !flpigeon_equals_double(*a->frame_rate, *b->frame_rate)) {
     return FALSE;
   }
+  if ((a->audio_track_count == nullptr) != (b->audio_track_count == nullptr)) {
+    return FALSE;
+  }
+  if (a->audio_track_count != nullptr && *a->audio_track_count != *b->audio_track_count) {
+    return FALSE;
+  }
+  if ((a->size_bytes == nullptr) != (b->size_bytes == nullptr)) {
+    return FALSE;
+  }
+  if (a->size_bytes != nullptr && *a->size_bytes != *b->size_bytes) {
+    return FALSE;
+  }
   return TRUE;
 }
 
@@ -1533,6 +1618,8 @@ guint nmc_video_probe_hash(NmcVideoProbe* self) {
   result = result * 31 + static_cast<guint>(self->has_audio);
   result = result * 31 + (self->audio_codec != nullptr ? g_str_hash(self->audio_codec) : 0);
   result = result * 31 + (self->frame_rate != nullptr ? flpigeon_hash_double(*self->frame_rate) : 0);
+  result = result * 31 + (self->audio_track_count != nullptr ? static_cast<guint>(*self->audio_track_count) : 0);
+  result = result * 31 + (self->size_bytes != nullptr ? static_cast<guint>(*self->size_bytes) : 0);
   return result;
 }
 

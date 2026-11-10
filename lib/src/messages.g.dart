@@ -533,6 +533,7 @@ class ImageProbe {
     required this.height,
     required this.frameCount,
     this.mimeType,
+    this.sizeBytes,
   });
 
   int width;
@@ -543,8 +544,11 @@ class ImageProbe {
 
   String? mimeType;
 
+  /// Size of the source in bytes, when the platform can tell.
+  int? sizeBytes;
+
   List<Object?> _toList() {
-    return <Object?>[width, height, frameCount, mimeType];
+    return <Object?>[width, height, frameCount, mimeType, sizeBytes];
   }
 
   Object encode() {
@@ -558,6 +562,7 @@ class ImageProbe {
       height: result[1]! as int,
       frameCount: result[2]! as int,
       mimeType: result[3] as String?,
+      sizeBytes: result[4] as int?,
     );
   }
 
@@ -573,7 +578,8 @@ class ImageProbe {
     return _deepEquals(width, other.width) &&
         _deepEquals(height, other.height) &&
         _deepEquals(frameCount, other.frameCount) &&
-        _deepEquals(mimeType, other.mimeType);
+        _deepEquals(mimeType, other.mimeType) &&
+        _deepEquals(sizeBytes, other.sizeBytes);
   }
 
   @override
@@ -593,6 +599,8 @@ class VideoProbe {
     required this.hasAudio,
     this.audioCodec,
     this.frameRate,
+    this.audioTrackCount,
+    this.sizeBytes,
   });
 
   int width;
@@ -617,6 +625,12 @@ class VideoProbe {
   /// reports it.
   double? frameRate;
 
+  /// Number of audio tracks the container has.
+  int? audioTrackCount;
+
+  /// Size of the source in bytes, when the platform can tell.
+  int? sizeBytes;
+
   List<Object?> _toList() {
     return <Object?>[
       width,
@@ -629,6 +643,8 @@ class VideoProbe {
       hasAudio,
       audioCodec,
       frameRate,
+      audioTrackCount,
+      sizeBytes,
     ];
   }
 
@@ -649,6 +665,8 @@ class VideoProbe {
       hasAudio: result[7]! as bool,
       audioCodec: result[8] as String?,
       frameRate: result[9] as double?,
+      audioTrackCount: result[10] as int?,
+      sizeBytes: result[11] as int?,
     );
   }
 
@@ -670,7 +688,9 @@ class VideoProbe {
         _deepEquals(isHdr, other.isHdr) &&
         _deepEquals(hasAudio, other.hasAudio) &&
         _deepEquals(audioCodec, other.audioCodec) &&
-        _deepEquals(frameRate, other.frameRate);
+        _deepEquals(frameRate, other.frameRate) &&
+        _deepEquals(audioTrackCount, other.audioTrackCount) &&
+        _deepEquals(sizeBytes, other.sizeBytes);
   }
 
   @override

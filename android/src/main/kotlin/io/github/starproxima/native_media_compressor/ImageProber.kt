@@ -14,7 +14,7 @@ internal object ImageProber {
         val mimeType = ImageHeaders.mimeType(source.readHeader()) ?: stored.second
         val size = if (swapsSides(exifOrientation(source, mimeType))) stored.first.transposed() else stored.first
         val frames = BufferedInputStream(source.openStream()).use { ImageHeaders.frameCount(mimeType, it) }
-        return ImageProbe(size.width.toLong(), size.height.toLong(), frames.toLong(), mimeType)
+        return ImageProbe(size.width.toLong(), size.height.toLong(), frames.toLong(), mimeType, source.sizeBytes())
     }
 
     /** Size of the encoded pixels before orientation, read from the header only. */

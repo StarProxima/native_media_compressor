@@ -208,7 +208,9 @@ abstract final class NativeMediaCompressor {
     final sourceSize =
         minSavings == null
             ? null
-            : sourceBytes ?? await StagedFiles.sizeOf(source);
+            : sourceBytes ??
+                await StagedFiles.sizeOf(source) ??
+                (await _platform.probeImage(source))?.sizeBytes;
 
     CompressionResult? best;
     var attempt = options;
@@ -338,7 +340,9 @@ final class _VideoJob {
     }
     final minSavings = options.minSavingsPercent;
     final sourceBytes =
-        minSavings == null ? null : await StagedFiles.sizeOf(source);
+        minSavings == null
+            ? null
+            : await StagedFiles.sizeOf(source) ?? metadata?.sizeBytes;
     final targetBytes = metadata == null ? null : options.targetBytes;
     final isStaged = sourceBytes != null || targetBytes != null;
     if (_isCancelled) {
