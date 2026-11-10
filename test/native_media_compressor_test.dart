@@ -73,6 +73,7 @@ void main() {
             width: 720,
             height: 1280,
             sizeBytes: 1000,
+            videoCodec: 'video/hevc',
           ),
         );
 
@@ -84,12 +85,14 @@ void main() {
             maxBytes: 5000,
             maxFrameRate: 100000,
             includeAudio: false,
+            codec: VideoCodec.hevc,
           ),
         ).result;
 
     expect(result.status, CompressionStatus.compressed);
     expect(result.path, '/out.mp4');
     expect((result.width, result.height, result.sizeBytes), (720, 1280, 1000));
+    expect(result.videoCodec, VideoCodec.hevc);
     final request =
         host.callsOf('compressVideo').single[1]! as pigeon.VideoRequest;
     expect(request.source, '/in.mov');
@@ -97,6 +100,7 @@ void main() {
     expect(request.maxBytes, 5000);
     expect(request.includeAudio, isFalse);
     expect(request.maxFrameRate, 240);
+    expect(request.codec, pigeon.VideoCodec.hevc);
   });
 
   test('a status other than compressed has no path', () async {

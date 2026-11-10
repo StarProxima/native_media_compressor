@@ -34,7 +34,7 @@ class ResultCard extends StatelessWidget {
     final height = result.height;
     final codec = result.videoCodec;
     final fellBack =
-        outcome.requestedCodec == VideoCodec.hevc && codec == 'video/avc';
+        outcome.requestedCodec == VideoCodec.hevc && codec == VideoCodec.h264;
 
     return SectionCard(
       title: result.isCompressed ? 'Result' : _title(result.status),
@@ -63,7 +63,13 @@ class ResultCard extends StatelessWidget {
                   value: Formats.resolution(width, height),
                 ),
               if (codec != null)
-                Fact(label: 'Codec written', value: Formats.codec(codec)),
+                Fact(
+                  label: 'Codec written',
+                  value: switch (codec) {
+                    VideoCodec.h264 => 'H.264',
+                    VideoCodec.hevc => 'HEVC',
+                  },
+                ),
               Fact(
                 label: 'Time taken',
                 value: Formats.elapsed(outcome.elapsed),

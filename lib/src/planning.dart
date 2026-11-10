@@ -84,7 +84,7 @@ abstract final class VideoPlanning {
     }
     final explicit = options.videoBitrate;
     if (explicit != null) return explicit;
-    final percent = options.qualityPercent;
+    final percent = options.sourceBitratePercent;
     if (percent != null && sourceVideo != null) {
       return sourceVideo * percent ~/ 100;
     }

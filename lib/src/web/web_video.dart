@@ -463,7 +463,7 @@ final class WebVideoJob {
       width: shownWidth,
       height: shownHeight,
       sizeBytes: output.size,
-      videoCodec: hevc ? 'video/hevc' : 'video/avc',
+      videoCodec: hevc ? VideoCodec.hevc : VideoCodec.h264,
     );
   }
 

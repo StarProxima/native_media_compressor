@@ -58,18 +58,18 @@ void main() {
       );
     });
 
-    test('quality percent is a share of the source video bitrate', () {
+    test('source bitrate percent is a share of the source video bitrate', () {
       expect(
         VideoPlanning.videoBitrate(
           _phone,
-          const VideoOptions(qualityPercent: 30),
+          const VideoOptions(sourceBitratePercent: 30),
         ),
         (10000000 - VideoPlanning.audioBitrate) * 30 ~/ 100,
       );
       expect(
         VideoPlanning.videoBitrate(
           _phone,
-          const VideoOptions(qualityPercent: 100),
+          const VideoOptions(sourceBitratePercent: 100),
         ),
         ((10000000 - VideoPlanning.audioBitrate) * VideoPlanning.maxSourceShare)
             .round(),
@@ -99,7 +99,7 @@ void main() {
           const VideoOptions(
             targetBytes: 5000000,
             videoBitrate: 9000000,
-            qualityPercent: 90,
+            sourceBitratePercent: 90,
           ),
         ),
         (5000000 * 8 * 0.95 / 20 - 128000).round(),
