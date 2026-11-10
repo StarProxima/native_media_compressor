@@ -122,7 +122,10 @@ internal class VideoTranscoder(
             // as 19200 fps, which the encoder's rate control must not see.
             val frameRate = (listOfNotNull(sourceFrameRate, maxFrameRate).minOrNull() ?: DEFAULT_FRAME_RATE)
                 .coerceAtMost(MAX_ENCODER_FRAME_RATE)
-            val configured = if (request.codec == VideoCodec.HEVC) {
+            // MediaMuxer writes HEVC into MP4 only from API 24; before that an HEVC
+            // encoder may configure fine and the muxer then rejects its first frame.
+            val canMuxHevc = Build.VERSION.SDK_INT >= Build.VERSION_CODES.N
+            val configured = if (request.codec == VideoCodec.HEVC && canMuxHevc) {
                 runCatching { configureEncoder(MediaFormat.MIMETYPE_VIDEO_HEVC, stored, frameRate) }.getOrNull()
             } else {
                 null
@@ -214,6 +217,9 @@ internal class VideoTranscoder(
             runCatching { encoder?.release() }
             runCatching { frames?.release() }
             runCatching { inputSurface?.release() }
+            // release() stops a started muxer first and skips the native release when
+            // that stop throws, so a failed stop is taken separately.
+            runCatching { muxer?.stop() }
             runCatching { muxer?.release() }
             audio.forEach { runCatching { it.release() } }
             extractors.forEach { runCatching { it.release() } }
@@ -291,6 +297,9 @@ internal class VideoTranscoder(
                     encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
                 }
                 return ConfiguredEncoder(encoder, mime, out)
+            }
+            if (failure is MediaCodec.CodecException && isTemporary(failure)) {
+                throw Stop(CompressionStatus.INTERRUPTED, "$name encoder is busy: $failure")
             }
             throw Stop(CompressionStatus.UNSUPPORTED, "no $name encoder for ${out.width}x${out.height}: $failure")
         } catch (error: Exception) {
@@ -756,12 +765,20 @@ internal class VideoTranscoder(
 
         private fun Long.saturatingPlus(other: Long): Long = if (this > Long.MAX_VALUE - other) Long.MAX_VALUE else this + other
 
-        // A missing codec or one that rejects this format is a platform limit, not a broken input.
+        // A missing codec or one that rejects this format is a platform limit, not a
+        // broken input. A codec that is merely busy or reclaimed will come back.
         private inline fun <T> codec(what: String, block: () -> T): T = try {
             block()
+        } catch (error: MediaCodec.CodecException) {
+            if (isTemporary(error)) throw Stop(CompressionStatus.INTERRUPTED, "$what is busy: $error")
+            throw Stop(CompressionStatus.UNSUPPORTED, "no $what: $error")
         } catch (error: Exception) {
             throw Stop(CompressionStatus.UNSUPPORTED, "no $what: $error")
         }
+
+        private fun isTemporary(error: MediaCodec.CodecException): Boolean =
+            error.isTransient || error.isRecoverable || isReclaimed(error) ||
+                (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && error.errorCode == MediaCodec.CodecException.ERROR_INSUFFICIENT_RESOURCE)
 
         /**
          * The format to decode and the name of a decoder that claims to support it,
