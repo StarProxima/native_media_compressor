@@ -68,6 +68,10 @@ ff -f lavfi -i "$SMALL" -f lavfi -i "$TONE:duration=1" \
   -c:v libx264 -preset veryfast -b:v 400k -pix_fmt yuv420p -c:a aac -b:a 64k format_h264.3gp
 ff -f lavfi -i "$SMALL" -f lavfi -i "$TONE:duration=1" \
   -c:v libx264 -preset veryfast -b:v 400k -pix_fmt yuv420p -c:a aac -b:a 64k format_h264.mkv
+# Mono AAC at a rate the AAC encoders do not take, so re-encoding must resample.
+ff -f lavfi -i "$SMALL" -f lavfi -i "sine=frequency=440:sample_rate=22050:duration=1" \
+  -c:v libx264 -preset veryfast -b:v 400k -pix_fmt yuv420p -c:a aac -ar 22050 -ac 1 -b:a 48k \
+  format_aac_22k.mp4
 ff -f lavfi -i "$SMALL" -c:v libx265 -preset veryfast -b:v 400k -pix_fmt yuv420p -tag:v hvc1 \
   -x265-params log-level=error format_hevc.mp4
 ff -f lavfi -i "$SMALL" -c:v libvpx -b:v 400k format_vp8.webm

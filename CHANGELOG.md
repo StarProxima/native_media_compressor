@@ -22,6 +22,9 @@
 * Linux: the build takes the GStreamer headers only from 1.20 on, which the
   code needs; older headers now give the no-video build instead of a compile
   error. Replies and progress are always queued on the main loop.
+* Windows: audio at a sample rate other than 44.1 or 48 kHz, or with more
+  than two channels, is resampled and downmixed for the AAC encoder instead
+  of making the video `unsupported`.
 * Documentation: `targetBytes` needs a readable duration, `minSavingsPercent`
   needs the source size (an Android `content://` source is always kept),
   which `ImageOptions` fields `videoThumbnail` uses, the Android service in

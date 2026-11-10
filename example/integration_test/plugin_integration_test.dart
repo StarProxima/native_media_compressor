@@ -50,6 +50,9 @@ const _all = {..._Host.values};
 const List<_Format> _videoFormats = [
   (name: 'format_h264.m4v', compresses: _all, rejects: {}),
   (name: 'format_h264.3gp', compresses: _all, rejects: {}),
+  // Mono AAC at 22.05 kHz: copied where AAC is copied, resampled where it is
+  // re-encoded, since the AAC encoders take only 44.1 and 48 kHz.
+  (name: 'format_aac_22k.mp4', compresses: _all, rejects: {}),
   (
     name: 'format_h264.mkv',
     compresses: {_Host.android, _Host.windows, _Host.linux},
